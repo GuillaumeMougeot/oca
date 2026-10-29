@@ -37,7 +37,7 @@
 ## Phases
 
 1. **Local MVP.** Done 2026-10-29. CPU run end to end ([journal](docs/journal/2026-10-29-local-mvp.md)).
-2. **Cluster.** In progress: `oca cluster` commands and `oca uninstall` written; smoke test queued ([journal](docs/journal/2026-10-29-cluster-smoke-test.md)).
+2. **Cluster.** In progress: `oca cluster` and `oca uninstall` written. The remote side works on a B200. Blocked on registering this machine's SSH key on UCloud (owner) ([journal](docs/journal/2026-10-29-cluster-smoke-test.md)).
    - Smoke test: Qwen3.8-27B-FP8 on 1×B200.
    - Then, if the owner approves: pull DeepSeek-V4.1-Flash-1017 and validate it on 2×B200.
 3. **Eval.** A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults.
