@@ -86,6 +86,9 @@ def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> d
         "provider": providers,
         "model": ref,
         "small_model": ref,
+        # A reasoning model thinks for 500-1,400 tokens to write a session title, and with
+        # one server slot (MTP) the first turn waits behind it: 29-84 s per session on CPU.
+        "agent": {"title": {"disable": True}},
     }
 
 

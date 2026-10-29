@@ -22,7 +22,7 @@
 |---|---|---|---|
 | Agent | OpenCode 1.19.5 | MIT | Pi (minimal; keep in mind for a custom harness), Hermes/OpenClaw (personal assistants) |
 | Local engine | llama.cpp b11982 | MIT | Ollama (an extra daemon), vLLM locally (fixed VRAM fraction on a shared GPU) |
-| Local model, cpu | Qwen3.6-35B-A3B Q4 (22 GB) | Apache-2.0 | Dense models: too slow on CPU |
+| Local model, cpu | Qwen3.6-35B-A3B Q4 with MTP (23 GB, 20 tok/s) | Apache-2.0 | Dense models: too slow on CPU |
 | Local model, gpu | Qwen3.8-27B Q4 (18 GB) | Apache-2.0 | – |
 | Cluster engine | vLLM 0.32 | Apache-2.0 | SGLang (a viable fallback) |
 | Cluster model | Proposed: DeepSeek-V4.1-Flash-1017 original weights (510 GB, 2×B200); smoke test: Qwen3.8-27B-FP8 ([journal](docs/journal/2026-10-29-cluster-model.md)) | MIT; Apache-2.0 | ISTA 2-bit GGUF on 1×B200 (unverified agentic quality, new llama.cpp path), GLM-5.3-Flash, Kimi |

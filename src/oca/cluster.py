@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from .config import CLUSTER_MODELS, VLLM_VERSION, ClusterModel, OcaError, Settings, data_dir
+from .config import VLLM_VERSION, ClusterModel, OcaError, Settings, data_dir
 
 if TYPE_CHECKING:  # ucloud_api is imported lazily: it is slow and only needed here
     from ucloud_api import UCloudClient
@@ -77,12 +77,6 @@ def _write(job: Job | None, kind: str) -> None:
         jobs[kind] = job
     state_path().parent.mkdir(parents=True, exist_ok=True)
     state_path().write_text(json.dumps({k: asdict(v) for k, v in jobs.items()}))
-
-
-def serving() -> ClusterModel | None:
-    """The cluster model `oca` should use, if a serve job was started and not stopped."""
-    job = read("serve")
-    return CLUSTER_MODELS.get(job.model) if job else None
 
 
 # -- remote scripts (pure, unit-tested) ----------------------------------------------------

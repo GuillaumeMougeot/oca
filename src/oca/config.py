@@ -40,11 +40,17 @@ MODELS: dict[str, Model] = {
     for m in (
         Model(
             "qwen3.6-35b-a3b",
-            "unsloth/Qwen3.6-35B-A3B-GGUF",
+            "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
             "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
-            22.4,
+            22.9,
             65536,
             "MoE, 3B active, Apache-2.0: CPU default",
+            # MTP drafting: 11.9 -> 20.5 tok/s on CPU at 3 tokens (2: 16.7, 4: 17.5).
+            # llama.cpp supports it with a single slot only.
+            (
+                *("--temp", "0.6", "--top-p", "0.95", "--top-k", "20"),
+                *("--spec-type", "draft-mtp", "--spec-draft-n-max", "3", "--parallel", "1"),
+            ),
         ),
         Model(
             "qwen3.8-27b",
