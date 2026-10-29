@@ -25,7 +25,7 @@
 | Local model, cpu | Qwen3.6-35B-A3B Q4 (22 GB) | Apache-2.0 | Dense models: too slow on CPU |
 | Local model, gpu | Qwen3.8-27B Q4 (18 GB) | Apache-2.0 | – |
 | Cluster engine | vLLM 0.32 | Apache-2.0 | SGLang (a viable fallback) |
-| Cluster model | Qwen3.8-Flash-Next NVFP4 (133 GB, 1×B200) | Qwen Community License (open weights, not OSI) | GLM-5.3-Flash (MIT, needs 4×B200), Qwen3.8-27B FP8 (Apache, the fallback) |
+| Cluster model | Proposed: DeepSeek-V4.1-Flash-1017 IQ2_XXS (249 GB, 1×B200, llama.cpp); fallback Qwen3.8-Flash-Next NVFP4 ([journal](docs/journal/2026-10-29-cluster-model.md)) | MIT; Qwen Community | GLM-5.3-Flash (needs 2×B200 or more), Kimi (needs 4×B200 or more) |
 | Router, automation | none | – | LiteLLM (OpenCode already does multi-provider), n8n (fair-code) |
 
 ## Install UX (decided)
