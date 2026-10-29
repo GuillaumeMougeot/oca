@@ -142,6 +142,15 @@ def serve_script(model: ClusterModel, settings: Settings, tag: str) -> str:
             f'  rm -rf "{venv}" && uv venv -p 3.12 "{venv}" || exit 1',
             f'  uv pip install -p "{venv}" "vllm=={VLLM_VERSION}" --torch-backend=auto || exit 1',
             "fi",
+            # The app ships no CUDA toolkit, so FlashInfer cannot JIT-compile its kernels:
+            # install its prebuilt ones, matching the installed flashinfer and CUDA versions.
+            f'read -r fi cu < <("{venv}/bin/python" -c \'import importlib.metadata as m; '
+            't = m.version("torch"); '
+            'print(m.version("flashinfer-python"), "cu130" if "+cu13" in t else "cu129")\')',
+            f'uv pip install -p "{venv}" "flashinfer-cubin==$fi" '
+            "--extra-index-url https://flashinfer.ai/whl || exit 1",
+            f'uv pip install -p "{venv}" "flashinfer-jit-cache==$fi+$cu" '
+            '--extra-index-url "https://flashinfer.ai/whl/$cu" || exit 1',
             # Compile caches on the drive make every start after the first one faster.
             "export XDG_CACHE_HOME=/work/oca/cache VLLM_CACHE_ROOT=/work/oca/cache/vllm",
             "export HF_HUB_OFFLINE=1",
@@ -153,6 +162,18 @@ def serve_script(model: ClusterModel, settings: Settings, tag: str) -> str:
             "  sleep 10",
             "done",
             'echo "oca: ready"',
+            # One request from inside the job: proves serving works and logs the speed.
+            f'"{venv}/bin/python" - <<\'PY\' || echo "oca: self-test failed"',
+            "import json, time, urllib.request",
+            'ask = [{"role": "user", "content": "Explain a hash map in 150 words."}]',
+            f'body = json.dumps({{"model": "{model.id}", "max_tokens": 512, "messages": ask}})',
+            f'url = "{health}/v1/chat/completions"',
+            'head = {"Content-Type": "application/json"}',
+            "req = urllib.request.Request(url, body.encode(), head)",
+            "t = time.time()",
+            'n = json.load(urllib.request.urlopen(req, timeout=900))["usage"]["completion_tokens"]',
+            'print(f"oca: self-test {n} tokens in {time.time() - t:.1f} s")',
+            "PY",
             # Stop when the token counters have not moved for cluster_idle minutes.
             'idle=0; last=""; stopped=0',
             'while kill -0 "$pid" 2>/dev/null; do',
@@ -249,6 +270,26 @@ def _submit(settings: Settings, job: Job, script: str, gpus: int) -> Job:
 
 def _new(kind: str, model: ClusterModel) -> Job:
     return Job(kind, "", model.id, f"{kind}-{model.id}-{time.strftime('%Y%m%d-%H%M%S')}")
+
+
+def _key_blob(public_key: str) -> str:
+    parts = public_key.split()
+    return parts[1] if len(parts) > 1 else ""
+
+
+def unregistered_key() -> Path | None:
+    """A local public key to register when none of ~/.ssh/*.pub is known to UCloud."""
+    from ucloud_api import SSHKeys
+
+    local = {p: _key_blob(p.read_text()) for p in sorted(Path.home().glob(".ssh/*.pub"))}
+    with _client() as client:
+        known = {
+            _key_blob((k.get("specification") or {}).get("key") or k.get("key") or "")
+            for k in SSHKeys(client).list()
+        }
+    if not local or set(local.values()) & known:
+        return None
+    return next(iter(local))
 
 
 def weights_ready(settings: Settings, model: ClusterModel) -> bool:
@@ -373,6 +414,11 @@ def ensure_tunnel(settings: Settings, job: Job, timeout: float = 300) -> None:
         )
     for _ in range(30):
         if proc.poll() is not None:
+            if "Permission denied" in log.read_text(errors="replace")[-2000:]:
+                raise OcaError(
+                    "UCloud rejected this machine's SSH key. Register it (see `oca cluster up`), "
+                    "then restart: jobs only learn keys at start."
+                )
             raise OcaError(f"SSH tunnel failed; see {log}")
         if _port_open(settings.cluster_port):
             job.tunnel_pid = proc.pid

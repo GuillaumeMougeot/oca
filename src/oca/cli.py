@@ -265,6 +265,11 @@ def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
     if job and job.model != m.id:
         raise OcaError(f"{job.model} is up; `oca cluster down` first")
     if job is None:
+        if key := cluster.unregistered_key():
+            raise OcaError(
+                "UCloud does not know this machine's SSH key, so the tunnel would fail. "
+                f"Register it once: `oca ucloud ssh-keys add {key} --title $(hostname)`"
+            )
         if m.size_gb > 100 and not cluster.weights_ready(settings, m):
             raise OcaError(
                 f"{m.id} ({m.size_gb:g} GB) is not on the drive yet. Run `oca cluster pull "
