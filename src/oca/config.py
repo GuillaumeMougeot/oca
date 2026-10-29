@@ -15,6 +15,7 @@ from platformdirs import user_config_path, user_data_path
 # Bump deliberately and journal why: upstream releases change flags and formats.
 LLAMA_CPP_TAG = "b11982"
 OPENCODE_VERSION = "1.19.5"
+VLLM_VERSION = "0.32.0"
 DEVICES = ("auto", "cpu", "gpu")
 
 
@@ -58,6 +59,72 @@ MODELS: dict[str, Model] = {
 DEFAULT_MODEL = {"cpu": "qwen3.6-35b-a3b", "gpu": "qwen3.8-27b"}
 
 
+@dataclass(frozen=True)
+class ClusterModel:
+    """A model served by vLLM on UCloud B200s. Flags follow the vLLM recipe for it."""
+
+    id: str
+    repo: str
+    size_gb: float
+    gpus: int
+    context: int
+    note: str
+    args: tuple[str, ...] = ()
+    env: tuple[tuple[str, str], ...] = ()
+
+
+CLUSTER_MODELS: dict[str, ClusterModel] = {
+    m.id: m
+    for m in (
+        ClusterModel(
+            "qwen3.8-27b-fp8",
+            "Qwen/Qwen3.8-27B-FP8",
+            30.9,
+            1,
+            262144,
+            "official FP8, Apache-2.0",
+            (
+                "--language-model-only",
+                *("--enable-auto-tool-choice", "--tool-call-parser", "qwen3_coder"),
+                *("--reasoning-parser", "qwen3"),
+            ),
+        ),
+        ClusterModel(
+            "deepseek-v4.1-flash",
+            "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            510.3,
+            2,
+            262144,  # model allows 1M; 256k keeps the indexer buffer small at TP2
+            "original weights, MIT; recipe's verified B200 TP2 setting",
+            (
+                "--language-model-only",
+                *("--tensor-parallel-size", "2"),
+                *("--tokenizer-mode", "deepseek_v41"),
+                *("--enable-auto-tool-choice", "--tool-call-parser", "deepseek_v41"),
+                *("--reasoning-parser", "deepseek_v41"),
+                *("--engram-config", '{"cpu_offload":true,"use_thp":true}'),
+                *("--max-num-seqs", "8", "--max-num-batched-tokens", "4096"),
+                *(
+                    "--compilation-config",
+                    '{"mode":"VLLM_COMPILE","cudagraph_mode":"FULL_AND_PIECEWISE",'
+                    '"cudagraph_capture_sizes":[6,12,18,24,30,36,48,60,72,96,120,144,192,'
+                    "240,288,384,480,576,768,1020,1536,2046,3072,4092]}",
+                    "--max-cudagraph-capture-size",
+                    "4092",
+                ),
+                *(
+                    "--speculative-config",
+                    '{"method":"dspark","num_speculative_tokens":5,'
+                    '"draft_sample_method":"probabilistic","rejection_sample_method":"block",'
+                    '"enable_adaptive_verification":true}',
+                ),
+            ),
+            (("VLLM_ENGINE_READY_TIMEOUT_S", "3600"),),
+        ),
+    )
+}
+
+
 def config_dir() -> Path:
     return Path(os.environ.get("OCA_CONFIG_DIR") or user_config_path("oca"))
 
@@ -87,6 +154,11 @@ class Settings:
     port: int = 8080
     threads: int = 0  # 0: llama.cpp picks
     context: int = 0  # 0: the model's default
+    cluster_drive: str = ""  # UCloud drive for weights and job files, e.g. "/12383018"
+    cluster_model: str = "qwen3.8-27b-fp8"
+    cluster_hours: int = 8  # job time allocation
+    cluster_idle: int = 60  # minutes without requests before the job stops itself
+    cluster_port: int = 8001  # local end of the SSH tunnel
 
     @property
     def resolved_device(self) -> str:
@@ -107,6 +179,8 @@ class Settings:
             raise OcaError(f"device must be one of {', '.join(DEVICES)}, got {self.device!r}")
         if self.model != "auto" and self.model not in MODELS:
             raise OcaError(f"unknown model {self.model!r}; see `oca models`")
+        if self.cluster_model not in CLUSTER_MODELS:
+            raise OcaError(f"unknown cluster model {self.cluster_model!r}; see `oca models`")
 
     def set(self, key: str, value: str) -> None:
         names = {f.name for f in fields(self)}

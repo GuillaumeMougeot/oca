@@ -7,10 +7,11 @@ import os
 from pathlib import Path
 from typing import Any, NoReturn
 
-from . import install
+from . import cluster, install
 from .config import OcaError, Settings, config_dir
 
 PROVIDER = "oca-local"
+CLUSTER = "oca-cluster"
 
 # OpenCode allows every tool by default; a local model once ran
 # `pip install --break-system-packages`. Ask for shell commands, except read-only
@@ -37,35 +38,52 @@ def config_path() -> Path:
     return config_dir() / "opencode.json"
 
 
+def _provider(name: str, port: int, model_id: str, label: str, context: int) -> dict[str, Any]:
+    return {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": name,
+        # CPU prefill of a long prompt can exceed the 5 min default.
+        "options": {"baseURL": f"http://127.0.0.1:{port}/v1", "headerTimeout": 1_800_000},
+        "models": {
+            model_id: {
+                "name": label,
+                "tool_call": True,
+                "reasoning": True,
+                "limit": {"context": context, "output": min(32768, context // 2)},
+            }
+        },
+    }
+
+
 def opencode_config(settings: Settings) -> dict[str, Any]:
+    """Local model always; the cluster model too, as default, while a serve job is up."""
     model = settings.resolved_model
-    context = settings.resolved_context
+    providers = {
+        PROVIDER: _provider(
+            "oca local (llama.cpp)",
+            settings.port,
+            model.id,
+            f"{model.id} ({settings.resolved_device})",
+            settings.resolved_context,
+        )
+    }
     ref = f"{PROVIDER}/{model.id}"
+    if remote := cluster.serving():
+        providers[CLUSTER] = _provider(
+            "oca cluster (vLLM on UCloud)",
+            settings.cluster_port,
+            remote.id,
+            f"{remote.id} ({remote.gpus}x B200)",
+            remote.context,
+        )
+        ref = f"{CLUSTER}/{remote.id}"
     return {
         "$schema": "https://opencode.ai/config.json",
         "autoupdate": False,  # versions are pinned by oca
         "share": "disabled",
-        "enabled_providers": [PROVIDER],  # open models only, no hosted fallbacks
+        "enabled_providers": list(providers),  # open models only, no hosted fallbacks
         "permission": PERMISSION,
-        "provider": {
-            PROVIDER: {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "oca local (llama.cpp)",
-                # CPU prefill of a long prompt can exceed the 5 min default.
-                "options": {
-                    "baseURL": f"http://127.0.0.1:{settings.port}/v1",
-                    "headerTimeout": 1_800_000,
-                },
-                "models": {
-                    model.id: {
-                        "name": f"{model.id} ({settings.resolved_device})",
-                        "tool_call": True,
-                        "reasoning": True,
-                        "limit": {"context": context, "output": min(32768, context // 2)},
-                    }
-                },
-            }
-        },
+        "provider": providers,
         "model": ref,
         "small_model": ref,
     }

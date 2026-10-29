@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -127,3 +128,53 @@ def test_permissions_ask_by_default_and_deny_system_installs() -> None:
     assert next(iter(bash.items())) == ("*", "ask")  # first, so later rules override it
     assert bash["*--break-system-packages*"] == "deny"
     assert list(bash)[-1] in {k for k, v in bash.items() if v == "deny"}  # denies win
+
+
+def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:
+    from oca import cluster
+
+    s = Settings(cluster_idle=45)
+    for model in config.CLUSTER_MODELS.values():
+        script = cluster.serve_script(model, s, "serve-x")
+        path = tmp_path / "serve.sh"
+        path.write_text(script)
+        assert subprocess.run(["bash", "-n", str(path)]).returncode == 0
+        assert "-ge 45 ]" in script and "/work/oca/logs/serve-x.log" in script
+        assert f"--served-model-name {model.id}" in script
+        assert "--host 127.0.0.1" in script  # reachable only through the SSH tunnel
+        assert f"vllm=={config.VLLM_VERSION}" in script
+
+
+def test_cluster_provider_becomes_default_while_serving() -> None:
+    from oca import cluster
+
+    cluster._write(cluster.Job("serve", "123", "deepseek-v4.1-flash", "t"), "serve")
+    cfg = agent.opencode_config(Settings(cluster_port=8123))
+    remote = cfg["provider"][agent.CLUSTER]
+    assert remote["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
+    assert cfg["model"] == f"{agent.CLUSTER}/deepseek-v4.1-flash"
+    assert set(cfg["enabled_providers"]) == {agent.PROVIDER, agent.CLUSTER}
+    cluster._write(None, "serve")
+    assert agent.opencode_config(Settings())["model"].startswith(agent.PROVIDER)
+
+
+def test_tunnel_binds_localhost_and_pins_host_keys_per_job(tmp_path: Path) -> None:
+    from oca import cluster
+
+    cmd = cluster.tunnel_command("ucloud", "ssh.cloud.sdu.dk", 3421, 8001, tmp_path / "kh")
+    assert "127.0.0.1:8001:127.0.0.1:8000" in cmd
+    assert f"UserKnownHostsFile={tmp_path / 'kh'}" in cmd
+    assert "BatchMode=yes" in cmd  # never hangs on a password prompt
+
+
+def test_uninstall_only_deletes_what_oca_created(tmp_path: Path) -> None:
+    data = Path(os.environ["OCA_DATA"])
+    for part in ("models/x.gguf", "bin/llama-server", "unrelated/keep.txt"):
+        (data / part).parent.mkdir(parents=True, exist_ok=True)
+        (data / part).write_text("x")
+    Settings().save()
+    install.remove(install.owned_paths(keep_models=True))
+    assert (data / "models" / "x.gguf").exists() and (data / "unrelated" / "keep.txt").exists()
+    assert not (data / "bin").exists() and not Settings.path().exists()
+    install.remove(install.owned_paths())
+    assert not (data / "models").exists() and (data / "unrelated" / "keep.txt").exists()

@@ -29,7 +29,9 @@ Goal: installing it is as easy as uv or Claude Code, plus one model download. oc
   - Ask the owner before spending GPU-hours.
   - The `/models` drive (`/12383018`) is tight: about 1 TB left for the whole project.
   - Read job logs, not job status.
+  - Full B200s can be fully booked, and a job can sit IN_QUEUE for a long time.
   - ucloud-api has its own traps; see its README.
+- Scripted `opencode run`: give it `< /dev/null`, because it waits on a piped stdin. Never wrap `timeout` in `/usr/bin/time`: OpenCode lands in a background process group and stops on SIGTTIN ([journal](docs/journal/2026-10-29-speed.md)).
 
 ## How to work
 

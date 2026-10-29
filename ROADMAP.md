@@ -11,8 +11,8 @@
       │ OpenAI-compatible HTTP
  ┌────┴──────────────────────┐
  local :8080                 cluster :8001 (SSH tunnel)
- llama.cpp llama-server      vLLM, 1×B200 UCloud job
- cpu: Qwen3.6-35B-A3B        Qwen3.8-Flash-Next NVFP4
+ llama.cpp llama-server      vLLM, UCloud B200 job    
+ cpu: Qwen3.6-35B-A3B        DeepSeek-V4.1-Flash (2×B200)
  gpu: Qwen3.8-27B            weights on /models drive
 ```
 
@@ -25,23 +25,21 @@
 | Local model, cpu | Qwen3.6-35B-A3B Q4 (22 GB) | Apache-2.0 | Dense models: too slow on CPU |
 | Local model, gpu | Qwen3.8-27B Q4 (18 GB) | Apache-2.0 | – |
 | Cluster engine | vLLM 0.32 | Apache-2.0 | SGLang (a viable fallback) |
-| Cluster model | Proposed: DeepSeek-V4.1-Flash-1017 IQ2_XXS (249 GB, 1×B200, llama.cpp); fallback Qwen3.8-Flash-Next NVFP4 ([journal](docs/journal/2026-10-29-cluster-model.md)) | MIT; Qwen Community | GLM-5.3-Flash (needs 2×B200 or more), Kimi (needs 4×B200 or more) |
+| Cluster model | Proposed: DeepSeek-V4.1-Flash-1017 original weights (510 GB, 2×B200); smoke test: Qwen3.8-27B-FP8 ([journal](docs/journal/2026-10-29-cluster-model.md)) | MIT; Apache-2.0 | ISTA 2-bit GGUF on 1×B200 (unverified agentic quality, new llama.cpp path), GLM-5.3-Flash, Kimi |
 | Router, automation | none | – | LiteLLM (OpenCode already does multi-provider), n8n (fair-code) |
 
 ## Install UX (decided)
 
 1. `install.sh` installs uv if it's missing, then `uv tool install` oca, then runs `oca setup` (binaries, about 1 GB).
 2. The first `oca` repairs anything missing and asks before the model download.
-3. The cluster is optional: `ucloud login`, then `oca cluster up`.
+3. The cluster is optional: `oca ucloud login`, then `oca cluster up`.
 
 ## Phases
 
 1. **Local MVP.** Done 2026-10-29. CPU run end to end ([journal](docs/journal/2026-10-29-local-mvp.md)).
-2. **Cluster.** Next.
-   - Check that vLLM supports the Qwen3.8-Flash-Next architecture.
-   - Download the weights to `/models` from inside a cheap CPU job.
-   - Smoke-test vLLM in `terminal-almalinux` (it has SSH) on 1×B200.
-   - Add `oca cluster up/down/status`: ucloud-api job, auto-extend, `ssh -L 8001`, and a second OpenCode provider.
+2. **Cluster.** In progress: `oca cluster` commands and `oca uninstall` written; smoke test queued ([journal](docs/journal/2026-10-29-cluster-smoke-test.md)).
+   - Smoke test: Qwen3.8-27B-FP8 on 1×B200.
+   - Then, if the owner approves: pull DeepSeek-V4.1-Flash-1017 and validate it on 2×B200.
 3. **Eval.** A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults.
 4. **Phone.** `opencode web` on localhost, reached by SSH tunnel or WireGuard, or tmux over SSH.
 5. **Polish.**

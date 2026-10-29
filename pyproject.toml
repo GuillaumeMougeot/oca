@@ -18,6 +18,8 @@ dependencies = [
     "rich>=13.7",
     "tomli-w>=1.0",
     "typer>=0.12",
+    # GPL-3.0, same author; pinned commit for reproducible installs.
+    "ucloud-api @ git+https://github.com/GuillaumeMougeot/ucloud-api@ab86d39b51bc380ad6ee05fcd1c7894af7a459a3",
 ]
 
 [project.urls]
@@ -28,6 +30,9 @@ oca = "oca.cli:entrypoint"
 
 [dependency-groups]
 dev = ["mypy>=1.11", "pytest>=8.1", "pytest-cov>=5.0", "ruff>=0.6"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/oca"]
@@ -46,3 +51,7 @@ files = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[[tool.mypy.overrides]]
+module = ["ucloud_api", "ucloud_api.*"]  # ships no py.typed marker yet
+ignore_missing_imports = true
