@@ -145,16 +145,13 @@ def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:
         assert f"vllm=={config.VLLM_VERSION}" in script
 
 
-def test_cluster_provider_becomes_default_while_serving() -> None:
-    from oca import cluster
-
-    cluster._write(cluster.Job("serve", "123", "deepseek-v4.1-flash", "t"), "serve")
-    cfg = agent.opencode_config(Settings(cluster_port=8123))
-    remote = cfg["provider"][agent.CLUSTER]
-    assert remote["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
+def test_cluster_provider_becomes_default_when_reachable() -> None:
+    remote = config.CLUSTER_MODELS["deepseek-v4.1-flash"]
+    cfg = agent.opencode_config(Settings(cluster_port=8123), remote)
+    provider = cfg["provider"][agent.CLUSTER]
+    assert provider["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
     assert cfg["model"] == f"{agent.CLUSTER}/deepseek-v4.1-flash"
     assert set(cfg["enabled_providers"]) == {agent.PROVIDER, agent.CLUSTER}
-    cluster._write(None, "serve")
     assert agent.opencode_config(Settings())["model"].startswith(agent.PROVIDER)
 
 

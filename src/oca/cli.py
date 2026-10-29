@@ -51,12 +51,14 @@ def _ready(settings: Settings, yes: bool) -> None:
         install.setup()
     if job := cluster.read("serve"):
         try:
-            with console.status(f"Connecting to {job.model} on UCloud") as st:
-                cluster.wait_ready(settings, job, st.update)
-            agent.write_config(settings)
-            return
+            with console.status(f"Connecting to {job.model} on UCloud"):
+                doing = cluster.check(settings, job)
+            if doing is None:
+                agent.write_config(settings, CLUSTER_MODELS[job.model])
+                return
+            console.print(f"[yellow]{job.model} on UCloud: {doing}. Using the local model.[/]")
         except OcaError as e:
-            console.print(f"[yellow]cluster unavailable, using the local model:[/] {e}")
+            console.print(f"[yellow]UCloud unavailable, using the local model:[/] {e}")
     model = settings.resolved_model
     if not model_path(model).exists():
         where = model_path(model).parent
@@ -279,7 +281,7 @@ def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
     began = time.monotonic()
     with console.status("waiting") as st:
         cluster.wait_ready(settings, job, st.update)
-    agent.write_config(settings)
+    agent.write_config(settings, m)
     minutes = (time.monotonic() - began) / 60
     console.print(f"Ready after {minutes:.0f} min. `oca` now uses {m.id}.")
 

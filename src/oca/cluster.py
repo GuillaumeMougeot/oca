@@ -402,29 +402,35 @@ def healthy(settings: Settings) -> bool:
         return False
 
 
+def check(settings: Settings, job: Job) -> str | None:
+    """One connection attempt: None when the server answers, else what it is doing.
+
+    Re-opens the tunnel if needed. A finished job is forgotten and raises.
+    """
+    from ucloud_api import Jobs, JobState
+
+    with _client() as client:
+        state = Jobs(client).state(job.job_id)
+    if state.is_terminal:
+        _write(None, job.kind)
+        tail = log_tail(settings, job)
+        raise OcaError(f"job {job.job_id} ended ({state.value}). Log tail:\n{tail}")
+    if state != JobState.RUNNING:
+        return str(state.value).lower().replace("_", " ")
+    ensure_tunnel(settings, job)
+    if healthy(settings):
+        return None
+    last = log_tail(settings, job, lines=1)
+    return f"loading: {last[-100:]}" if last else "starting"
+
+
 def wait_ready(
     settings: Settings, job: Job, on_progress: Callable[[str], None], timeout: float = 7200
 ) -> None:
     """Block until the remote server answers, reporting the job state and last log line."""
-    from ucloud_api import Jobs, JobState
-
     deadline = time.monotonic() + timeout
-    with _client() as client:
-        jobs = Jobs(client)
-        while True:
-            state = jobs.state(job.job_id)
-            if state.is_terminal:
-                _write(None, job.kind)
-                tail = log_tail(settings, job)
-                raise OcaError(f"job {job.job_id} ended ({state.value}). Log tail:\n{tail}")
-            if state == JobState.RUNNING:
-                ensure_tunnel(settings, job)
-                if healthy(settings):
-                    return
-                last = log_tail(settings, job, lines=1)
-                on_progress(f"loading: {last[-100:]}" if last else "starting")
-            else:
-                on_progress(state.value.lower().replace("_", " "))
-            if time.monotonic() > deadline:
-                raise OcaError(f"not ready after {timeout / 60:.0f} min; see `oca cluster logs`")
-            time.sleep(10)
+    while (doing := check(settings, job)) is not None:
+        on_progress(doing)
+        if time.monotonic() > deadline:
+            raise OcaError(f"not ready after {timeout / 60:.0f} min; see `oca cluster logs`")
+        time.sleep(10)

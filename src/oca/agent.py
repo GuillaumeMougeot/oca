@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 from typing import Any, NoReturn
 
-from . import cluster, install
-from .config import OcaError, Settings, config_dir
+from . import install
+from .config import ClusterModel, OcaError, Settings, config_dir
 
 PROVIDER = "oca-local"
 CLUSTER = "oca-cluster"
@@ -55,8 +55,8 @@ def _provider(name: str, port: int, model_id: str, label: str, context: int) -> 
     }
 
 
-def opencode_config(settings: Settings) -> dict[str, Any]:
-    """Local model always; the cluster model too, as default, while a serve job is up."""
+def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> dict[str, Any]:
+    """The local model; plus ``remote``, as the default, when the cluster answers."""
     model = settings.resolved_model
     providers = {
         PROVIDER: _provider(
@@ -68,7 +68,7 @@ def opencode_config(settings: Settings) -> dict[str, Any]:
         )
     }
     ref = f"{PROVIDER}/{model.id}"
-    if remote := cluster.serving():
+    if remote:
         providers[CLUSTER] = _provider(
             "oca cluster (vLLM on UCloud)",
             settings.cluster_port,
@@ -89,10 +89,10 @@ def opencode_config(settings: Settings) -> dict[str, Any]:
     }
 
 
-def write_config(settings: Settings) -> Path:
+def write_config(settings: Settings, remote: ClusterModel | None = None) -> Path:
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(opencode_config(settings), indent=2) + "\n")
+    path.write_text(json.dumps(opencode_config(settings, remote), indent=2) + "\n")
     return path
 
 
