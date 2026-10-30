@@ -26,7 +26,7 @@ from pathlib import Path
 import httpx
 
 from . import cluster, server
-from .config import OcaError, Settings, data_dir, process_alive
+from .config import CLUSTER_MODELS, EFFORTS, OcaError, Settings, data_dir, process_alive
 
 CHECK_S = 5  # a cluster health check stays valid this long
 SUPERVISE_S = 60  # how often a down cluster is checked again (job state, tunnel)
@@ -51,22 +51,32 @@ class Router:
     def forget_remote(self) -> None:
         self._remote, self._seen = None, time.monotonic()
 
-    def backend(self) -> tuple[str, str, bool]:
-        """Base URL and model id for the next request, and whether it is the cluster."""
+    def backend(self) -> tuple[str, str, bool, tuple[str | int, ...]]:
+        """Base URL, model id and effort values for the next request; True if the cluster."""
         if model := self.remote():
-            return f"http://127.0.0.1:{self.settings.cluster_port}", model, True
+            efforts = CLUSTER_MODELS[model].efforts if model in CLUSTER_MODELS else ()
+            return f"http://127.0.0.1:{self.settings.cluster_port}", model, True, efforts
         with self._start:
             server.start(self.settings)
         local = f"http://127.0.0.1:{server.port(self.settings)}"
-        return local, self.settings.resolved_model.id, False
+        return local, self.settings.resolved_model.id, False, ()
 
 
-def _retarget(body: bytes, model: str) -> bytes:
-    """The request body with ``model`` set to the backend's own model id."""
+def _retarget(body: bytes, model: str, efforts: tuple[str | int, ...]) -> bytes:
+    """The request body for the backend: its model id, and oca's effort in its own terms."""
     with suppress(ValueError):
         payload = json.loads(body)
         if isinstance(payload, dict) and "model" in payload:
-            return json.dumps({**payload, "model": model}).encode()
+            payload["model"] = model
+            level = payload.pop("reasoning_effort", None)
+            kwargs = payload.get("chat_template_kwargs") or {}
+            if level == "none":
+                kwargs["enable_thinking"] = False  # Qwen templates and DeepSeek's encoder
+            elif efforts and level in EFFORTS:
+                kwargs["reasoning_effort"] = efforts[EFFORTS.index(level) - 1]
+            if kwargs:
+                payload["chat_template_kwargs"] = kwargs
+            return json.dumps(payload).encode()
     return body
 
 
@@ -81,7 +91,7 @@ def handler(router: Router) -> type[BaseHTTPRequestHandler]:
         def _forward(self, body: bytes) -> None:
             for retry in (False, True):
                 try:
-                    base, model, remote = router.backend()
+                    base, model, remote, efforts = router.backend()
                 except OcaError as e:
                     return self._error(f"no model is up: {e}")
                 headers = {
@@ -92,7 +102,7 @@ def handler(router: Router) -> type[BaseHTTPRequestHandler]:
                 url, timeout = base + self.path, httpx.Timeout(None, connect=3)
                 try:
                     stream = httpx.stream(
-                        self.command, url, content=_retarget(body, model), headers=headers,
+                        self.command, url, content=_retarget(body, model, efforts), headers=headers,
                         timeout=timeout,
                     )  # fmt: skip
                     with stream as r:
@@ -156,8 +166,9 @@ def log_path() -> Path:
 
 
 def _key(settings: Settings) -> str:
-    """Changes when the router must restart: new settings or a new oca."""
-    raw = json.dumps([asdict(settings), version("oca")], sort_keys=True).encode()
+    """Changes when the router must restart: new settings or new oca code."""
+    code = b"".join(f.read_bytes() for f in sorted(Path(__file__).parent.glob("*.py")))
+    raw = json.dumps([asdict(settings), version("oca")], sort_keys=True).encode() + code
     return hashlib.sha256(raw).hexdigest()[:16]
 
 

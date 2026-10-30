@@ -94,6 +94,24 @@ def test_opencode_sees_one_model_served_by_the_router(no_gpu: None) -> None:
     # Sized for the local model, so a session can always fall back to it.
     assert model["limit"]["context"] == s.resolved_context > model["limit"]["output"]
     assert cfg["permission"]["webfetch"] == "ask"
+    assert model["variants"]["max"] == {"reasoningEffort": "max"}
+
+
+def test_router_translates_effort_for_each_model() -> None:
+    from oca import router
+
+    def send(level: str, model: str, efforts: tuple[str | int, ...]) -> dict[str, Any]:
+        body = json.dumps({"model": "auto", "reasoning_effort": level}).encode()
+        out: dict[str, Any] = json.loads(router._retarget(body, model, efforts))
+        assert out["model"] == model and "reasoning_effort" not in out
+        return out.get("chat_template_kwargs", {})
+
+    flash = config.CLUSTER_MODELS["qwen3.8-flash-next"].efforts
+    deepseek = config.CLUSTER_MODELS["deepseek-v4.1-flash"].efforts
+    assert send("max", "qwen3.8-flash-next", flash) == {"reasoning_effort": "xhigh"}
+    assert send("medium", "deepseek-v4.1-flash", deepseek) == {"reasoning_effort": 62}
+    assert send("none", "deepseek-v4.1-flash", deepseek) == {"enable_thinking": False}
+    assert send("high", "qwen3.6-35b-a3b", ()) == {}  # local: thinking stays on
 
 
 def test_llama_assets() -> None:

@@ -76,11 +76,19 @@ def _ready(settings: Settings, yes: bool) -> None:
 
 
 @app.callback()
-def main(ctx: typer.Context, yes: Yes = False) -> None:
+def main(
+    ctx: typer.Context,
+    resume: Annotated[bool, typer.Option("--continue", "-c", help="Resume the last session.")] = (
+        False
+    ),
+    session: Annotated[str | None, typer.Option("--session", "-s", help="Resume this one.")] = None,
+    yes: Yes = False,
+) -> None:
     if ctx.invoked_subcommand is None:
         settings = Settings.load()
         _ready(settings, yes)
-        agent.launch([])
+        args = ["--continue"] if resume else []
+        agent.launch(args + (["--session", session] if session else []))
 
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})

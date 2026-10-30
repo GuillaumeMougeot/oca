@@ -67,6 +67,11 @@ MODELS: dict[str, Model] = {
 DEFAULT_MODEL = {"cpu": "qwen3.6-35b-a3b", "gpu": "qwen3.8-27b"}
 
 
+# oca's effort levels, offered to OpenCode as variants of oca/auto. "none" turns thinking off;
+# a cluster model maps the others to its own `reasoning_effort` values.
+EFFORTS = ("none", "low", "medium", "high", "max")
+
+
 @dataclass(frozen=True)
 class ClusterModel:
     """A model served by vLLM on UCloud B200s. Flags follow the vLLM recipe for it."""
@@ -79,6 +84,9 @@ class ClusterModel:
     note: str
     args: tuple[str, ...] = ()
     env: tuple[tuple[str, str], ...] = ()
+    # The model's reasoning_effort for low, medium, high and max; () if it only has thinking
+    # on or off. Checked against its chat template (Flash-Next) or vLLM's encoder (DeepSeek).
+    efforts: tuple[str | int, ...] = ()
 
 
 CLUSTER_MODELS: dict[str, ClusterModel] = {
@@ -112,6 +120,7 @@ CLUSTER_MODELS: dict[str, ClusterModel] = {
                 *("--enable-auto-tool-choice", "--tool-call-parser", "qwen3_coder"),
                 *("--reasoning-parser", "qwen3"),
             ),
+            efforts=("low", "medium", "xhigh", "xhigh"),  # xhigh is its default and top
         ),
         ClusterModel(
             "deepseek-v4.1-flash",
@@ -144,6 +153,7 @@ CLUSTER_MODELS: dict[str, ClusterModel] = {
                 ),
             ),
             (("VLLM_ENGINE_READY_TIMEOUT_S", "3600"),),
+            efforts=("low", 62, "high", "max"),  # a 1-100 budget: low 50, high 75 (default)
         ),
     )
 }

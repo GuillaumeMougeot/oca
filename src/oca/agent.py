@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from . import install
-from .config import ClusterModel, OcaError, Settings, config_dir
+from .config import EFFORTS, ClusterModel, OcaError, Settings, config_dir
 
 PROVIDER = "oca"
 MODEL = "auto"  # oca's router serves it with the best live server
@@ -54,6 +54,8 @@ def _provider(name: str, port: int, model_id: str, label: str, context: int) -> 
                 "tool_call": True,
                 "reasoning": True,
                 "limit": {"context": context, "output": min(32768, context // 2)},
+                # ctrl+t in OpenCode cycles these; oca's router translates them per model.
+                "variants": {e: {"reasoningEffort": e} for e in EFFORTS},
             }
         },
     }

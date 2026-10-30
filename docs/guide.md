@@ -21,6 +21,14 @@ Run the same line again to update.
 
 OpenCode sees one model, `oca/auto`: the UCloud model while a server answers, else the local model. A session carries on when the model behind it changes, mid-task or when you resume it later.
 
+**Resume:** `oca -c` reopens the last session in this directory, and `oca -s <id>` reopens a given one. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists sessions.
+
+**Effort:** `ctrl+t` in OpenCode cycles `oca/auto`'s variants: `none`, `low`, `medium`, `high`, `max`. Without a variant, each model uses its default. For one task: `oca run -- run --variant low "…"`.
+- `none` turns thinking off: fastest, but weakest.
+- Qwen3.8-Flash-Next maps the others to `low`, `medium` and `xhigh` (its default).
+- DeepSeek maps them to a budget of 50, 62, 75 (its default) and 100.
+- The local model only has thinking on or off.
+
 OpenCode asks before shell commands that change things, and before fetching from the web.
 
 ## Local model
