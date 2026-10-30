@@ -14,3 +14,4 @@ One file per question: `YYYY-MM-DD-topic.md`, dated by when it was opened. Each 
 | [2026-10-30-one-b200-model](2026-10-30-one-b200-model.md) | RESOLVED | Qwen3.8-Flash-Next NVFP4 on one B200: ready in 5 min, 350 to 390 tok/s |
 | [2026-10-30-eval](2026-10-30-eval.md) | OPEN | Polyglot Python exercises per model and effort; harness ready, first run pending |
 | [2026-10-30-effort](2026-10-30-effort.md) | RESOLVED | Effort as OpenCode variants of oca/auto, translated per model by the router; thinking off made Flash-Next wrong |
+| [2026-10-30-permissions](2026-10-30-permissions.md) | RESOLVED | Like Claude Code's auto mode: allow; ask before deleting, history rewrites, network, installs; deny administration |

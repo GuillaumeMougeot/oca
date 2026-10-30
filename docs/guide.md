@@ -29,7 +29,12 @@ OpenCode sees one model, `oca/auto`: the UCloud model while a server answers, el
 - DeepSeek maps them to a budget of 50, 62, 75 (its default) and 100.
 - The local model only has thinking on or off.
 
-OpenCode asks before shell commands that change things, and before fetching from the web.
+**Project instructions:** the agent reads `AGENTS.md` from the project and its parent directories, or `CLAUDE.md` where there is none, plus `AGENT.md` and your global `~/.claude/CLAUDE.md`.
+
+**Permissions:** like Claude Code's auto mode.
+- Allowed: everything else.
+- Asks first: deleting (`rm`), rewriting git history or pushing, reaching other machines (`curl`, `ssh`, web fetch and search), installing outside the project, and touching paths outside the project. Answer *always* to stop being asked for the rest of the session.
+- Never allowed: administration, such as `sudo`, `su`, `systemctl` or `--break-system-packages`.
 
 ## Local model
 
