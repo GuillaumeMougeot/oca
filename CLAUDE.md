@@ -33,7 +33,7 @@ Goal: installing it is as easy as uv or Claude Code, plus one model download. oc
   - Read job logs, not job status.
   - Full B200s can be fully booked: 2×B200 jobs queued for 1.5 to 2 h, while 1×B200 started within minutes. Test model-independent changes on 1×B200 first.
   - ucloud-api has its own traps; see its README.
-- Scripted `opencode run`: give it `< /dev/null`, because it waits on a piped stdin. Never wrap `timeout` in `/usr/bin/time`: OpenCode lands in a background process group and stops on SIGTTIN ([journal](docs/journal/2026-10-29-speed.md)).
+- Scripted `opencode run`: give it `< /dev/null`, because it waits on a piped stdin. Set `PWD` to its working directory: OpenCode takes the project from `$PWD`, so a stale one makes every file "external" ([journal](docs/journal/2026-10-30-eval.md)). Never wrap `timeout` in `/usr/bin/time`: OpenCode lands in a background process group and stops on SIGTTIN ([journal](docs/journal/2026-10-29-speed.md)).
 
 ## How to work
 
