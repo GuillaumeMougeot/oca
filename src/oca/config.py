@@ -177,7 +177,7 @@ class Settings:
     threads: int = 0  # 0: llama.cpp picks
     context: int = 0  # 0: the model's default
     cluster_drive: str = ""  # UCloud drive for weights and job files, e.g. "/1234567"
-    cluster_model: str = "deepseek-v4.1-flash"
+    cluster_model: str = "qwen3.8-flash-next"  # 1 B200: starts within minutes
     cluster_hours: int = 8  # job time allocation
     cluster_idle: int = 60  # minutes without requests before the job stops itself
     cluster_port: int = 8001  # local end of the SSH tunnel
