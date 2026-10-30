@@ -175,11 +175,15 @@ def test_stale_state_is_ignored() -> None:
     assert server.stop() is False
 
 
-def test_permissions_ask_by_default_and_deny_system_installs() -> None:
-    bash = agent.opencode_config(Settings())["permission"]["bash"]
-    assert next(iter(bash.items())) == ("*", "ask")  # first, so later rules override it
-    assert bash["*--break-system-packages*"] == "deny"
+def test_permissions_allow_work_ask_before_damage_deny_administration() -> None:
+    cfg = agent.opencode_config(Settings())
+    bash = cfg["permission"]["bash"]
+    assert next(iter(bash.items())) == ("*", "allow")  # first, so later rules override it
+    assert bash["rm *"] == bash["git push*"] == bash["curl *"] == "ask"
+    assert bash["sudo *"] == bash["*--break-system-packages*"] == "deny"
     assert list(bash)[-1] in {k for k, v in bash.items() if v == "deny"}  # denies win
+    assert cfg["permission"]["external_directory"] == cfg["permission"]["webfetch"] == "ask"
+    assert "AGENT.md" in cfg["instructions"]
 
 
 def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:

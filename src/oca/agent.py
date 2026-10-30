@@ -14,25 +14,38 @@ from .config import EFFORTS, ClusterModel, OcaError, Settings, config_dir
 PROVIDER = "oca"
 MODEL = "auto"  # oca's router serves it with the best live server
 
-# OpenCode allows every tool by default; a local model once ran
-# `pip install --break-system-packages`. Ask for shell commands, except read-only
-# and test ones. The last matching rule wins.
+# Like Claude Code's auto mode: work freely in the project; ask before deleting, rewriting
+# git history, reaching other machines or installing outside the project; never administer
+# the system (a local model once ran `pip install --break-system-packages`). OpenCode's
+# prompts offer "always" for the rest of the session. The last matching rule wins.
 PERMISSION: dict[str, Any] = {
     "edit": "allow",
-    "external_directory": "ask",
+    "external_directory": "ask",  # any path outside the project
     "bash": {
-        "*": "ask",
+        "*": "allow",
         **dict.fromkeys(
             [
-                *("ls*", "pwd", "cat *", "head *", "tail *", "wc *", "grep *", "rg *", "find *"),
-                *("git status*", "git diff*", "git log*", "git show*"),
-                *("pytest*", "python -m pytest*", "python3 -m pytest*", "uv run *"),
+                *("rm *", "rmdir *", "shred *", "truncate *", "dd *"),
+                *("git push*", "git reset --hard*", "git clean*", "git rebase*"),
+                *("git checkout -- *", "git restore *", "git branch -D *", "git stash drop*"),
+                *("curl *", "wget *", "ssh *", "scp *", "rsync *"),
+                *("pip install*", "pip3 install*", "python -m pip install*"),
+                *("python3 -m pip install*", "npm install -g*", "uv tool install*"),
+                *("kill *", "pkill *", "killall *", "crontab *", "docker *"),
             ],
-            "allow",
+            "ask",
         ),
-        **dict.fromkeys(["sudo *", "*--break-system-packages*", "rm -rf /*"], "deny"),
+        **dict.fromkeys(
+            [
+                *("sudo *", "su", "su *", "doas *", "pkexec *"),
+                *("systemctl *", "service *", "mount *", "umount *"),
+                *("reboot*", "shutdown*", "poweroff*", "passwd*"),
+                *("useradd *", "usermod *", "userdel *", "*--break-system-packages*"),
+                *("rm -rf /", "rm -rf ~", "rm -rf ~/"),
+            ],
+            "deny",
+        ),
     },
-    # The web is reached from this machine: ask, as Claude Code does.
     "webfetch": "ask",
     "websearch": "ask",
 }
@@ -80,6 +93,8 @@ def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> d
         "share": "disabled",
         "enabled_providers": list(providers),  # open models only, no hosted fallbacks
         "permission": PERMISSION,
+        # AGENTS.md, and CLAUDE.md without one, load natively; AGENT.md is a common variant.
+        "instructions": ["AGENT.md"],
         "provider": providers,
         "model": ref,
         "small_model": ref,
