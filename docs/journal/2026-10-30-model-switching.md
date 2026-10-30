@@ -1,6 +1,6 @@
 # Model switching
 
-**Status:** OPEN. Built: OpenCode sees one model, which oca's router serves from the best live server. Tested locally; to test against DeepSeek.
+**Status:** RESOLVED. OpenCode sees one model, which oca's router serves from the best live server. One session moved from the cluster to the local model and back with no user action.
 
 ## Question
 Can a task continue on another model, as in Claude Code, when the server it started on stops?
@@ -23,3 +23,9 @@ Can a task continue on another model, as in Claude Code, when the server it star
 - Local stack: OpenCode through the router fixed the bug-fix task on the CPU model (144 s cold).
 
 **Hypothesis for DeepSeek** (written before testing): the switch is invisible to OpenCode. The first request after a switch re-reads the session on the new server: about 1 s on DeepSeek, 1 to 2 min on the local CPU for a 10k-token session.
+
+**Live test** (Qwen3.8-Flash-Next on 1×B200; a member state with its own tunnel and router):
+1. A session fixed the bug on Flash-Next.
+2. Its tunnel was killed. The session's next request went to the local CPU model, which described the fix it had not made, in 20 s.
+3. The router re-opened the tunnel 41 s later.
+4. The session's next request went back to Flash-Next: it added a test, and pytest passed, in 2 s.

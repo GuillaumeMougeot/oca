@@ -10,5 +10,5 @@ One file per question: `YYYY-MM-DD-topic.md`, dated by when it was opened. Each 
 | [2026-10-29-speed](2026-10-29-speed.md) | RESOLVED | The model is the bottleneck, not Python. Bug-fix task on CPU: 201 s down to 38 s (cache, MTP, no title agent) |
 | [2026-10-29-cluster-smoke-test](2026-10-29-cluster-smoke-test.md) | RESOLVED | Serves on a B200 at 111 tok/s, ready 4.5 min after start; tunnel opens in 1.1 s |
 | [2026-10-30-shared-server](2026-10-30-shared-server.md) | OPEN | One server per project: works with a simulated second member; 8 requests at once keep 70 to 90% of solo speed |
-| [2026-10-30-model-switching](2026-10-30-model-switching.md) | OPEN | One model for OpenCode, routed by oca to the best live server; tested locally |
-| [2026-10-30-one-b200-model](2026-10-30-one-b200-model.md) | OPEN | Qwen3.8-Flash-Next NVFP4 for a single B200; validation pending |
+| [2026-10-30-model-switching](2026-10-30-model-switching.md) | RESOLVED | One model for OpenCode, routed by oca to the best live server; a session moved cluster → local → cluster |
+| [2026-10-30-one-b200-model](2026-10-30-one-b200-model.md) | RESOLVED | Qwen3.8-Flash-Next NVFP4 on one B200: ready in 5 min, 350 to 390 tok/s |

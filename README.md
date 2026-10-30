@@ -24,7 +24,7 @@ oca            # first run downloads the model, starts it, opens OpenCode
 oca ucloud login                        # once: paste the refresh token (see ucloud-api)
 oca ucloud files drives                 # pick a project drive for weights and job files
 oca config cluster_drive /<drive id>
-oca cluster pull deepseek-v4.1-flash    # big weights: cheap CPU job, no GPU-hours
+oca cluster pull                        # weights of the default model: a cheap CPU job, no GPU-hours
 oca cluster up                          # B200 job + SSH tunnel; `oca` now uses it
 oca cluster status | logs -f | extend 2 | down
 ```
