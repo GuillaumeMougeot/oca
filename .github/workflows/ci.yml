@@ -20,3 +20,15 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest --cov=oca
       - run: sh -n install.sh
+  install:
+    # The one-line install on a clean machine, from this checkout.
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git
+      - run: OCA_SOURCE="$GITHUB_WORKSPACE" sh install.sh
+      - run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          oca status
+          oca models

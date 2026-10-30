@@ -316,6 +316,12 @@ def test_waiting_for_the_server_does_not_count_queue_time(
         cluster.wait_ready(Settings(), job, lambda doing: None, timeout=0)
 
 
+def test_web_password_is_made_once_and_private() -> None:
+    first = agent.web_password()
+    assert len(first) >= 20 and agent.web_password() == first
+    assert (config.config_dir() / "web-password").stat().st_mode & 0o077 == 0
+
+
 def test_uninstall_only_deletes_what_oca_created(tmp_path: Path) -> None:
     data = Path(os.environ["OCA_DATA"])
     for part in ("models/x.gguf", "bin/llama-server", "unrelated/keep.txt"):

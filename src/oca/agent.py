@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -93,10 +94,20 @@ def write_config(settings: Settings, remote: ClusterModel | None = None) -> Path
     return path
 
 
-def launch(args: list[str]) -> NoReturn:
+def web_password() -> str:
+    """The password of `oca web`, made once and readable only by this user."""
+    path = config_dir() / "web-password"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(mode=0o600)
+        path.write_text(secrets.token_urlsafe(18))
+    return path.read_text().strip()
+
+
+def launch(args: list[str], **env: str) -> NoReturn:
     """Replace this process with OpenCode; the user's global config is left untouched."""
     exe = install.opencode()
     if exe is None:
         raise OcaError("OpenCode is not installed; run `oca setup`")
-    env = dict(os.environ, OPENCODE_CONFIG=str(config_path()))
-    os.execve(exe, [str(exe), *args], env)
+    full = dict(os.environ, OPENCODE_CONFIG=str(config_path()), **env)
+    os.execve(exe, [str(exe), *args], full)

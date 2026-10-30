@@ -42,10 +42,11 @@
    - Next: try sharing with a real second UCloud account.
    - A cluster model for one B200: done, Qwen3.8-Flash-Next. Single B200s start within minutes, while pairs waited 1.5 to 2 h.
    - Transparent model switching, as in Claude Code: done. OpenCode sees one model, served by oca's router from the best live server ([journal](docs/journal/2026-10-30-model-switching.md)).
-3. **Eval.** A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU, and Flash-Next against DeepSeek on quality.
-4. **Phone.** `opencode web` on localhost, reached by SSH tunnel or WireGuard, or tmux over SSH.
+3. **Eval.** Later, at the maintainer's request. A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU, and Flash-Next against DeepSeek on quality.
+4. **Phone.** Built 2026-10-30: `oca web` serves OpenCode's bundled web UI on localhost with a password, reached from a phone through an SSH tunnel ([guide](docs/guide.md#phone-and-other-machines)). Tested through its API; next, from a real phone.
 5. **Polish.**
-   - Publish `install.sh` and test it in a clean container in CI.
+   - User guide in Markdown: [docs/guide.md](docs/guide.md). A GitHub Pages site once the project grows.
+   - `install.sh` runs in a clean Ubuntu container in CI.
+   - One command to switch cluster models: done (`oca cluster up <model>` offers to stop or leave the current one).
    - macOS assets.
-   - Docs site.
    - Tag v0.1.

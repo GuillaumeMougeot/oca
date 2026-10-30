@@ -92,6 +92,25 @@ def run(ctx: typer.Context, yes: Yes = False) -> None:
 
 
 @app.command()
+def web(
+    port: Annotated[int, typer.Option(help="Port on this machine.")] = 4096,
+    yes: Yes = False,
+) -> None:
+    """OpenCode in a browser, e.g. on a phone through an SSH tunnel; password-protected."""
+    settings = Settings.load()
+    _ready(settings, yes)
+    password = agent.web_password()
+    console.print(
+        f"OpenCode at http://127.0.0.1:{port} (user opencode, password {password}).\n"
+        f"From a phone or laptop: `ssh -N -L {port}:127.0.0.1:{port} <you>@<this machine>`, "
+        "then open the same address."
+    )
+    agent.launch(
+        ["web", "--hostname", "127.0.0.1", "--port", str(port)], OPENCODE_SERVER_PASSWORD=password
+    )
+
+
+@app.command()
 def setup(force: Annotated[bool, typer.Option(help="Reinstall binaries.")] = False) -> None:
     """Install pinned llama.cpp and OpenCode binaries; write the OpenCode config."""
     install.setup(force=force)
@@ -277,7 +296,10 @@ def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
     m = _cluster_model(model, settings)
     job = cluster.read("serve")
     if job and job.model != m.id:
-        raise OcaError(f"{job.model} is up; `oca cluster down` first")
+        what = "Stop" if job.owner else "Leave"
+        _confirm(yes, f"{what} {job.model} and switch to {m.id}? `oca` works locally meanwhile.")
+        cluster.terminate(settings, "serve")
+        job = None
     if job is None:
         if key := cluster.unregistered_key():
             raise OcaError(
