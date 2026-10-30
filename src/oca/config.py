@@ -43,7 +43,7 @@ MODELS: dict[str, Model] = {
             "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
             "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
             22.9,
-            65536,
+            262144,  # 10 of 41 layers keep a KV cache (20 KB/token): the full context is ~5.4 GB
             "MoE, 3B active, Apache-2.0: CPU default",
             # MTP drafting: 11.9 -> 20.5 tok/s on CPU at 3 tokens (2: 16.7, 4: 17.5).
             # llama.cpp supports it with a single slot only.

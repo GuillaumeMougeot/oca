@@ -15,7 +15,7 @@ Can a task continue on another model, as in Claude Code, when the server it star
 - `oca.router` listens there. Each request goes to the UCloud server while its health check passes (cached 5 s), else to llama-server, now on `<port>+1` and started on demand. The `model` field is rewritten for the backend.
 - A refused connection to the cluster falls back to local within the same request. A stream cut mid-way ends that response; OpenCode retries it, and the retry goes local.
 - Every 60 s, while a job is known but not answering, the router runs `cluster.check`: it opens the tunnel once a queued job runs, and forgets ended jobs.
-- The context limit is the local model's (64k), so a session can always fall back. This costs DeepSeek's 262k; revisit with use.
+- The context limit is the local model's, so a session can always fall back. The CPU model now runs its full 262k context, like both cluster models: only 10 of its 41 layers keep a KV cache, and llama-server's RSS grew from 36.1 to 40.5 GB.
 - Rejected: LiteLLM's proxy. It has fallbacks, but not starting llama-server or re-opening tunnels, and it is a large dependency for about 100 lines of routing.
 
 ## Test
