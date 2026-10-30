@@ -51,8 +51,21 @@ PERMISSION: dict[str, Any] = {
 }
 
 
-def config_path() -> Path:
-    return config_dir() / "opencode.json"
+def config_path(unattended: bool = False) -> Path:
+    """oca's OpenCode config; the unattended one is for `opencode run`, which cannot ask."""
+    return config_dir() / ("opencode-run.json" if unattended else "opencode.json")
+
+
+def _refuse_asks(rules: Any) -> Any:
+    """``rules`` with every "ask" turned into "deny".
+
+    Unattended, OpenCode rejects what would ask, and a rejection ends the run. A denial is
+    an error the model reads and works around: 2 of 9 history tasks and most polyglot
+    failures ended on such a rejection.
+    """
+    if isinstance(rules, dict):
+        return {k: _refuse_asks(v) for k, v in rules.items()}
+    return "deny" if rules == "ask" else rules
 
 
 def _provider(name: str, port: int, model_id: str, label: str, context: int) -> dict[str, Any]:
@@ -103,9 +116,12 @@ def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> d
 
 
 def write_config(settings: Settings, remote: ClusterModel | None = None) -> Path:
+    cfg = opencode_config(settings, remote)
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(opencode_config(settings, remote), indent=2) + "\n")
+    path.write_text(json.dumps(cfg, indent=2) + "\n")
+    unattended = {**cfg, "permission": _refuse_asks(cfg["permission"])}
+    config_path(unattended=True).write_text(json.dumps(unattended, indent=2) + "\n")
     return path
 
 
@@ -125,5 +141,6 @@ def launch(args: list[str], **env: str) -> NoReturn:
     if exe is None:
         raise OcaError("OpenCode is not installed; run `oca setup`")
     # OpenCode takes its project from $PWD, which a caller may not have updated.
-    full = dict(os.environ, OPENCODE_CONFIG=str(config_path()), PWD=os.getcwd(), **env)
+    cfg = config_path(unattended=args[:1] == ["run"])
+    full = dict(os.environ, OPENCODE_CONFIG=str(cfg), PWD=os.getcwd(), **env)
     os.execve(exe, [str(exe), *args], full)

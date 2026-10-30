@@ -144,7 +144,7 @@ def run_one(task: Task, out: Path, variant: str | None, timeout: int) -> dict[st
     task.prepare(work)
     cmd = [str(install.opencode()), "run", *(["--variant", variant] if variant else [])]
     # OpenCode takes its project from $PWD, which subprocess does not update.
-    env = dict(os.environ, OPENCODE_CONFIG=str(agent.config_path()), PWD=str(work))
+    env = dict(os.environ, OPENCODE_CONFIG=str(agent.config_path(unattended=True)), PWD=str(work))
     start = time.monotonic()
     with (out / f"{task.name}.log").open("wb") as log, suppress(subprocess.TimeoutExpired):
         subprocess.run(

@@ -35,6 +35,7 @@ OpenCode sees one model, `oca/auto`: the UCloud model while a server answers, el
 - Allowed: everything else.
 - Asks first: deleting (`rm`), rewriting git history or pushing, reaching other machines (`curl`, `ssh`, web fetch and search), installing outside the project, and touching paths outside the project. Answer *always* to stop being asked for the rest of the session.
 - Never allowed: administration, such as `sudo`, `su`, `systemctl` or `--break-system-packages`.
+- Unattended runs (`oca run -- run …`) cannot ask, so what would ask is refused instead, and the agent carries on another way.
 
 ## Local model
 

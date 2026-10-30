@@ -153,7 +153,7 @@ def pull(model: Model) -> Path:
 
 # Only what oca creates is deleted, so an OCA_DATA pointing at a shared disk is never wiped.
 DATA_PARTS = ("bin", "models", "logs", "run")
-CONFIG_PARTS = ("config.toml", "opencode.json", "web-password")
+CONFIG_PARTS = ("config.toml", "opencode.json", "opencode-run.json", "web-password")
 
 
 def opencode_state_dirs() -> list[Path]:

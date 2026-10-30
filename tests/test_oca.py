@@ -97,6 +97,19 @@ def test_opencode_sees_one_model_served_by_the_router(no_gpu: None) -> None:
     assert model["variants"]["max"] == {"reasoningEffort": "max"}
 
 
+def test_unattended_runs_refuse_instead_of_asking() -> None:
+    def values(rules: Any) -> list[str]:
+        if isinstance(rules, dict):
+            return [x for v in rules.values() for x in values(v)]
+        return [rules]
+
+    agent.write_config(Settings())
+    interactive = json.loads(agent.config_path().read_text())["permission"]
+    unattended = json.loads(agent.config_path(unattended=True).read_text())["permission"]
+    assert "ask" in values(interactive) and "ask" not in values(unattended)
+    assert unattended["bash"]["rm *"] == "deny" and unattended["bash"]["*"] == "allow"
+
+
 def test_router_translates_effort_for_each_model() -> None:
     from oca import router
 
