@@ -7,7 +7,8 @@ Router for agents working on oca. It holds only what the code can't tell you and
 oca (Open Coding Agent) installs and runs a coding agent built only from open-source software and open-weight models:
 - OpenCode as the agent,
 - llama.cpp for local inference,
-- vLLM on UCloud B200s, driven through [ucloud-api](https://github.com/GuillaumeMougeot/ucloud-api).
+- vLLM on UCloud B200s, driven through [ucloud-api](https://github.com/GuillaumeMougeot/ucloud-api),
+- oca's router, which gives OpenCode one model served by the best live server.
 
 Goal: installing it is as easy as uv or Claude Code, plus one model download. oca is glue: configure upstream tools, don't rebuild them.
 

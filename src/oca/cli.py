@@ -11,7 +11,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import agent, cluster, install, server
+from . import agent, cluster, install, router, server
 from .config import (
     CLUSTER_MODELS,
     MODELS,
@@ -49,24 +49,30 @@ def _ready(settings: Settings, yes: bool) -> None:
     if not install.is_installed():
         console.print("[bold]First run: installing llama.cpp and OpenCode[/]")
         install.setup()
+    remote = None
     if job := cluster.read("serve"):
         try:
             with console.status(f"Connecting to {job.model} on UCloud"):
                 doing = cluster.check(settings, job)
             if doing is None:
-                agent.write_config(settings, CLUSTER_MODELS[job.model])
-                return
-            console.print(f"[yellow]{job.model} on UCloud: {doing}. Using the local model.[/]")
+                remote = CLUSTER_MODELS[job.model]
+            else:
+                console.print(
+                    f"[yellow]{job.model} on UCloud: {doing}. "
+                    "Using the local model; oca switches when it is up.[/]"
+                )
         except OcaError as e:
             console.print(f"[yellow]UCloud unavailable, using the local model:[/] {e}")
-    model = settings.resolved_model
-    if not model_path(model).exists():
-        where = model_path(model).parent
-        _confirm(yes, f"Download {model.id} ({model.size_gb} GB) to {where}?")
-        install.pull(model)
-    with console.status(f"Starting {model.id} on {settings.resolved_device}"):
-        server.start(settings)
-    agent.write_config(settings)
+    if remote is None:
+        model = settings.resolved_model
+        if not model_path(model).exists():
+            where = model_path(model).parent
+            _confirm(yes, f"Download {model.id} ({model.size_gb} GB) to {where}?")
+            install.pull(model)
+        with console.status(f"Starting {model.id} on {settings.resolved_device}"):
+            server.start(settings)
+    router.ensure(settings)
+    agent.write_config(settings, remote)
 
 
 @app.callback()
@@ -122,18 +128,23 @@ def models() -> None:
 
 @app.command()
 def start() -> None:
-    """Start the local model server (restarts it if settings changed)."""
+    """Start the local model server and oca's endpoint (restarts them if settings changed)."""
     settings = Settings.load()
     with console.status("Starting llama-server"):
-        state = server.start(settings)
+        server.start(settings)
+    router.ensure(settings)
     agent.write_config(settings)
-    console.print(f"Serving {settings.resolved_model.id} at http://127.0.0.1:{state.port}/v1")
+    console.print(
+        f"Serving at http://127.0.0.1:{settings.port}/v1: the UCloud model when it is up, "
+        f"else {settings.resolved_model.id}."
+    )
 
 
 @app.command()
 def stop() -> None:
-    """Stop the local model server."""
-    console.print("Stopped." if server.stop() else "Not running.")
+    """Stop the local model server and oca's endpoint."""
+    stopped = [router.stop(), server.stop()]
+    console.print("Stopped." if any(stopped) else "Not running.")
 
 
 @app.command()
@@ -150,6 +161,8 @@ def status() -> None:
     )
     table.add_row("llama.cpp", str(install.llama_server() or "missing"))
     table.add_row("opencode", str(install.opencode() or "missing"))
+    pid = router.running()
+    table.add_row("endpoint", f"pid {pid}, port {settings.port}" if pid else "stopped")
     if state:
         health = "ready" if server.healthy(state.port) else "loading"
         table.add_row("server", f"pid {state.pid}, port {state.port}, {health}")
@@ -217,6 +230,7 @@ def uninstall(
         _confirm(yes, "Stop oca's UCloud jobs? Servers you joined keep running.")
         for kind in ("serve", "pull"):
             cluster.terminate(settings, kind)
+    router.stop()
     server.stop()
     paths = install.owned_paths(keep_models=keep_models, purge=purge)
     for p in paths:
@@ -290,6 +304,7 @@ def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
     began = time.monotonic()
     with console.status("waiting") as st:
         cluster.wait_ready(settings, job, st.update)
+    router.ensure(settings)
     agent.write_config(settings, m)
     minutes = (time.monotonic() - began) / 60
     console.print(f"Ready after {minutes:.0f} min. `oca` now uses {m.id}.")
