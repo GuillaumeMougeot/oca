@@ -104,9 +104,20 @@ def run(ctx: typer.Context, yes: Yes = False) -> None:
 @app.command()
 def sessions(
     delete: Annotated[str | None, typer.Option("--delete", help="Delete this session.")] = None,
+    clear: Annotated[bool, typer.Option("--clear", help="Delete this folder's sessions.")] = False,
+    yes: Yes = False,
 ) -> None:
-    """List this folder's sessions (resume one with `oca -s <id>`), or delete one."""
-    agent.launch(["session", "delete", delete] if delete else ["session", "list"])
+    """List this folder's sessions (resume one with `oca -s <id>`), or delete them."""
+    if not clear:
+        agent.launch(["session", "delete", delete] if delete else ["session", "list"])
+    ids = agent.sessions_in(Path.cwd())
+    if not ids:
+        console.print("No sessions started in this folder.")
+        return
+    _confirm(yes, f"Delete {len(ids)} sessions started in {Path.cwd()} or below?", default=False)
+    for sid in ids:
+        agent.opencode(["session", "delete", sid])
+    console.print(f"Deleted {len(ids)} sessions.")
 
 
 @app.command()

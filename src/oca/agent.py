@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -135,6 +136,32 @@ def web_password() -> str:
 def api_key() -> str:
     """The key of oca's endpoint (router), which also guards the local llama-server."""
     return secret("api-key")
+
+
+def opencode(args: list[str]) -> str:
+    """Run OpenCode with oca's config here; returns its output."""
+    exe = install.opencode()
+    if exe is None:
+        raise OcaError("OpenCode is not installed; run `oca setup`")
+    env = dict(os.environ, OPENCODE_CONFIG=str(config_path()), PWD=os.getcwd())
+    return subprocess.run(
+        [str(exe), *args], env=env, capture_output=True, text=True, check=True
+    ).stdout
+
+
+def sessions_in(folder: Path) -> list[str]:
+    """Ids of the sessions started in ``folder`` or below.
+
+    OpenCode lists sessions per project, and files every folder outside git under one
+    "global" project, so its list from such a folder also holds other folders' sessions.
+    """
+    found = json.loads(opencode(["session", "list", "--format", "json", "-n", "1000000"]) or "[]")
+    root = str(folder)
+    return [
+        s["id"]
+        for s in found
+        if (d := s.get("directory") or "") == root or d.startswith(root.rstrip(os.sep) + os.sep)
+    ]
 
 
 def launch(args: list[str], **env: str) -> NoReturn:

@@ -21,7 +21,7 @@ curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.s
 
 OpenCode sees one model, `oca/auto`: the UCloud model while a server answers, else the local model. A session carries on when the model behind it changes, mid-task or when you resume it later.
 
-**Sessions:** `oca sessions` lists this folder's sessions; `oca sessions --delete <id>` deletes one. `oca -c` reopens the last session, and `oca -s <id>` a given one. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles while a UCloud server answers; the local CPU model skips them, since a title costs 40 to 80 s there.
+**Sessions:** `oca sessions` lists this folder's sessions; `oca sessions --delete <id>` deletes one, and `oca sessions --clear` all those started in this folder or below. `oca -c` reopens the last session, and `oca -s <id>` a given one. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles while a UCloud server answers; the local CPU model skips them, since a title costs 40 to 80 s there.
 
 **Effort:** `ctrl+t` in OpenCode cycles `oca/auto`'s variants: `none`, `low`, `medium`, `high`, `max`. Without a variant, each model uses its default. For one task: `oca run -- run --variant low "…"`.
 - `none` turns thinking off: fastest, but weakest.

@@ -210,6 +210,17 @@ def test_an_ended_job_is_forgotten_so_up_starts_anew(ucloud: dict[str, Any]) -> 
     assert cluster.ended(s, job) and cluster.read("serve") is None
 
 
+def test_sessions_in_a_folder_exclude_other_folders(monkeypatch: pytest.MonkeyPatch) -> None:
+    listed = [
+        {"id": "a", "directory": "/w/p"},
+        {"id": "b", "directory": "/w/p/sub"},
+        {"id": "c", "directory": "/w/project2"},  # shares the prefix, not the folder
+        {"id": "d", "directory": "/elsewhere"},
+    ]
+    monkeypatch.setattr(agent, "opencode", lambda args: json.dumps(listed))
+    assert agent.sessions_in(Path("/w/p")) == ["a", "b"]
+
+
 def test_stale_web_state_is_ignored() -> None:
     from oca import web
 
