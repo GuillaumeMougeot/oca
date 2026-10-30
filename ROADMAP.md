@@ -25,7 +25,7 @@
 | Local model, cpu | Qwen3.6-35B-A3B Q4 with MTP (23 GB, 20 tok/s) | Apache-2.0 | Dense models: too slow on CPU |
 | Local model, gpu | Qwen3.8-27B Q4 (18 GB) | Apache-2.0 | – |
 | Cluster engine | vLLM 0.32 | Apache-2.0 | SGLang (a viable fallback) |
-| Cluster model | DeepSeek-V4.1-Flash-1017 original weights (510 GB, 2×B200); smoke test: Qwen3.8-27B-FP8 ([journal](docs/journal/2026-10-29-cluster-model.md)) | MIT; Apache-2.0 | ISTA 2-bit GGUF on 1×B200 (unverified agentic quality, new llama.cpp path), GLM-5.3-Flash, Kimi |
+| Cluster model | DeepSeek-V4.1-Flash-1017 original weights (510 GB, 2×B200, 256 to 420 tok/s); 1×B200: Qwen3.8-27B-FP8 (111 tok/s) ([journal](docs/journal/2026-10-29-cluster-model.md)) | MIT; Apache-2.0 | ISTA 2-bit GGUF on 1×B200 (unverified agentic quality, new llama.cpp path), GLM-5.3-Flash, Kimi, Mistral Large 4 (610 GB in NVFP4: 4×B200) |
 | Router, automation | none | – | LiteLLM (OpenCode already does multi-provider), n8n (fair-code) |
 
 ## Install UX (decided)
@@ -37,9 +37,10 @@
 ## Phases
 
 1. **Local MVP.** Done 2026-10-29. CPU run end to end ([journal](docs/journal/2026-10-29-local-mvp.md)).
-2. **Cluster.** In progress. Verified: vLLM on a B200 (111 tok/s), the SSH tunnel, the DeepSeek pull ([journal](docs/journal/2026-10-29-cluster-smoke-test.md)).
-   - Next: validate DeepSeek-V4.1-Flash-1017 on 2×B200, with OpenCode through the tunnel.
-   - Then: one server shared by project members ([journal](docs/journal/2026-10-30-shared-server.md)).
+2. **Cluster.** Working 2026-10-30. DeepSeek-V4.1-Flash-1017 on 2×B200 does the bug-fix task in under 3 s, against 38 s on the local CPU ([journal](docs/journal/2026-10-29-cluster-model.md)). Project members share one server ([journal](docs/journal/2026-10-30-shared-server.md)).
+   - Next: try sharing with a real second UCloud account.
+   - A cluster model that fits one B200, between Qwen3.8-27B and DeepSeek in quality. Single B200s start within minutes, while pairs waited 1.5 to 2 h. First candidate: Qwen3.8-Flash-Next NVFP4 (133 GB).
+   - Transparent model switching, as in Claude Code: the next model picks up the task where the previous one stopped. Today OpenCode resumes a session with its last model and fails when that model is down. Idea: one stable local endpoint that routes to the best live server ([journal](docs/journal/2026-10-30-model-switching.md)).
 3. **Eval.** A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU.
 4. **Phone.** `opencode web` on localhost, reached by SSH tunnel or WireGuard, or tmux over SSH.
 5. **Polish.**

@@ -88,7 +88,7 @@ CLUSTER_MODELS: dict[str, ClusterModel] = {
             30.9,
             1,
             262144,
-            "official FP8, Apache-2.0",
+            "official FP8, Apache-2.0; 1 B200 starts sooner",
             (
                 "--language-model-only",
                 *("--enable-auto-tool-choice", "--tool-call-parser", "qwen3_coder"),
@@ -161,7 +161,7 @@ class Settings:
     threads: int = 0  # 0: llama.cpp picks
     context: int = 0  # 0: the model's default
     cluster_drive: str = ""  # UCloud drive for weights and job files, e.g. "/1234567"
-    cluster_model: str = "qwen3.8-27b-fp8"
+    cluster_model: str = "deepseek-v4.1-flash"
     cluster_hours: int = 8  # job time allocation
     cluster_idle: int = 60  # minutes without requests before the job stops itself
     cluster_port: int = 8001  # local end of the SSH tunnel

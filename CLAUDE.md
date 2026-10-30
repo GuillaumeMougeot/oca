@@ -30,7 +30,7 @@ Goal: installing it is as easy as uv or Claude Code, plus one model download. oc
   - Every project member's registered SSH key can log into SSH-enabled jobs.
   - `nproc` in a job counts the host's CPUs, not the product's: size thread pools from the product.
   - Read job logs, not job status.
-  - Full B200s can be fully booked, and a job can sit IN_QUEUE for a long time.
+  - Full B200s can be fully booked: 2×B200 jobs queued for 1.5 to 2 h, while 1×B200 started within minutes. Test model-independent changes on 1×B200 first.
   - ucloud-api has its own traps; see its README.
 - Scripted `opencode run`: give it `< /dev/null`, because it waits on a piped stdin. Never wrap `timeout` in `/usr/bin/time`: OpenCode lands in a background process group and stops on SIGTTIN ([journal](docs/journal/2026-10-29-speed.md)).
 

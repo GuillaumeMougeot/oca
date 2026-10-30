@@ -1,6 +1,6 @@
 # Cluster model
 
-**Status:** OPEN. Chosen: DeepSeek-V4.1-Flash-1017, original weights, 2×B200, vLLM. Weights downloaded; validation pending.
+**Status:** RESOLVED. DeepSeek-V4.1-Flash-1017 works on 2×B200 with vLLM: 256 to 420 tok/s single-stream, and the bug-fix task in under 3 s.
 
 ## Question
 What is the strongest open-weight coder we can serve reliably and fast on UCloud B200s?
@@ -41,3 +41,13 @@ DeepSWE v1.1 is the only benchmark that appears on most of the cards. The harnes
 - 100 to 250 tok/s single-stream with DSpark drafting, against 111 tok/s for Qwen3.8-27B on 1×B200 without drafting.
 - The bug-fix task through the tunnel takes 15 to 40 s, against 38 s on the local CPU.
 - 4 concurrent requests give at least 2.5× the throughput of one.
+
+**Result** (2026-10-30):
+- The first try failed after loading: DeepGEMM compiles kernels at startup and found no CUDA toolkit. pip had put one in the vLLM venv, so `CUDA_HOME` now points at it, with `nvcc` pinned to the runtime's 13.2 (13.4 fails CCCL's version check). The fix was checked on a 2-vCPU job, then on 1×B200, before the next 2×B200 run.
+- Ready 26 min after the job started: weights in 8 min, then 12 min of engine start-up and kernel warm-up. The compile caches stay on the drive for later starts.
+- Single-stream: 256 tok/s in the self-test, 330 to 420 tok/s once warm. DSpark accepts 3.5 tokens per step.
+- Bug-fix task through the tunnel: 2.6 and 2.8 s, both correct. Qwen3.8-27B on 1×B200 took 5.7 to 7.1 s; the local CPU took 38 s.
+- 4 concurrent requests: 3.1× the throughput of one. 8 concurrent: 1,815 tok/s in total, 227 per request.
+- Prefill: 120k tokens in 2.1 s.
+- Queue: 2×B200 jobs waited 1.5 and 2 h today; a 1×B200 job started within minutes.
+- Every hypothesis held, and speed beat it 2 to 10×.

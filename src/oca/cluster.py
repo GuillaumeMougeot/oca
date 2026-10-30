@@ -569,10 +569,17 @@ def check(settings: Settings, job: Job) -> str | None:
 def wait_ready(
     settings: Settings, job: Job, on_progress: Callable[[str], None], timeout: float = 7200
 ) -> None:
-    """Block until the remote server answers, reporting the job state and last log line."""
-    deadline = time.monotonic() + timeout
+    """Block until the remote server answers, reporting the job state and last log line.
+
+    ``timeout`` counts from the job's start: B200 queues can last hours.
+    """
+    deadline = None
     while (doing := check(settings, job)) is not None:
         on_progress(doing)
-        if time.monotonic() > deadline:
+        if doing == "in queue":
+            deadline = None
+        elif deadline is None:
+            deadline = time.monotonic() + timeout
+        elif time.monotonic() > deadline:
             raise OcaError(f"not ready after {timeout / 60:.0f} min; see `oca cluster logs`")
         time.sleep(10)

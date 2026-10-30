@@ -241,6 +241,22 @@ def test_starter_stops_and_unlists_its_server(ucloud: dict[str, Any]) -> None:
     assert ucloud["terminated"] == ["42"] and ucloud["files"] == {}
 
 
+def test_waiting_for_the_server_does_not_count_queue_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oca import cluster
+
+    job = cluster.Job("serve", "1", "m", "t")
+    states = iter(["in queue"] * 3 + [None])
+    monkeypatch.setattr(cluster, "check", lambda s, j: next(states))
+    monkeypatch.setattr(cluster.time, "sleep", lambda s: None)
+    cluster.wait_ready(Settings(), job, lambda doing: None, timeout=0)  # queued: no timeout
+    loading = iter(["loading"] * 3)
+    monkeypatch.setattr(cluster, "check", lambda s, j: next(loading))
+    with pytest.raises(OcaError, match="not ready"):
+        cluster.wait_ready(Settings(), job, lambda doing: None, timeout=0)
+
+
 def test_uninstall_only_deletes_what_oca_created(tmp_path: Path) -> None:
     data = Path(os.environ["OCA_DATA"])
     for part in ("models/x.gguf", "bin/llama-server", "unrelated/keep.txt"):
