@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import io
+import json
 import os
+import socket
 import subprocess
 import tarfile
+import threading
 from contextlib import nullcontext
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -72,15 +76,23 @@ def test_gpu_server_offloads_all(gpu: None) -> None:
     assert env.get("CUDA_VISIBLE_DEVICES") == os.environ.get("CUDA_VISIBLE_DEVICES")
 
 
-def test_opencode_config_points_at_local_server(no_gpu: None) -> None:
+def test_opencode_sees_one_model_served_by_the_router(no_gpu: None) -> None:
     s = Settings(port=8123)
-    cfg = agent.opencode_config(s)
+    remote = config.CLUSTER_MODELS["deepseek-v4.1-flash"]
+    cfg = agent.opencode_config(s, remote)
     provider = cfg["provider"][agent.PROVIDER]
     assert provider["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
-    assert cfg["model"] == f"{agent.PROVIDER}/{s.resolved_model.id}"
+    assert cfg["model"] == cfg["small_model"] == f"{agent.PROVIDER}/{agent.MODEL}"
     assert cfg["enabled_providers"] == [agent.PROVIDER]
-    limit = provider["models"][s.resolved_model.id]["limit"]
-    assert limit["context"] == s.resolved_context > limit["output"]
+    model = provider["models"][agent.MODEL]
+    assert (
+        remote.id in model["name"]
+        and s.resolved_model.id
+        in agent.opencode_config(s)["provider"][agent.PROVIDER]["models"][agent.MODEL]["name"]
+    )
+    # Sized for the local model, so a session can always fall back to it.
+    assert model["limit"]["context"] == s.resolved_context > model["limit"]["output"]
+    assert cfg["permission"]["webfetch"] == "ask"
 
 
 def test_llama_assets() -> None:
@@ -149,14 +161,61 @@ def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:
         assert "trap unlist EXIT" in script and "export CUDA_HOME=" in script
 
 
-def test_cluster_provider_becomes_default_when_reachable() -> None:
-    remote = config.CLUSTER_MODELS["deepseek-v4.1-flash"]
-    cfg = agent.opencode_config(Settings(cluster_port=8123), remote)
-    provider = cfg["provider"][agent.CLUSTER]
-    assert provider["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
-    assert cfg["model"] == f"{agent.CLUSTER}/deepseek-v4.1-flash"
-    assert set(cfg["enabled_providers"]) == {agent.PROVIDER, agent.CLUSTER}
-    assert agent.opencode_config(Settings())["model"].startswith(agent.PROVIDER)
+def _fake_server(seen: list[str]) -> ThreadingHTTPServer:
+    """An OpenAI-like server: /health answers, a completion streams three events."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_POST(self) -> None:
+            seen.append(json.loads(self.rfile.read(int(self.headers["Content-Length"])))["model"])
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for i in range(3):
+                self.wfile.write(f"data: {i}\n\n".encode())
+                self.wfile.flush()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def test_router_uses_the_cluster_while_it_answers_then_falls_back_mid_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from oca import cluster, router
+
+    remote_seen: list[str] = []
+    local_seen: list[str] = []
+    remote, local = _fake_server(remote_seen), _fake_server(local_seen)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    s = Settings(port=port, cluster_port=remote.server_address[1])
+    job = cluster.Job("serve", "1", "deepseek-v4.1-flash", "t")
+    monkeypatch.setattr(cluster, "read", lambda kind: job)
+    monkeypatch.setattr(server, "start", lambda settings: None)
+    monkeypatch.setattr(server, "port", lambda settings: local.server_address[1])
+    endpoint = ThreadingHTTPServer(("127.0.0.1", port), router.handler(router.Router(s)))
+    threading.Thread(target=endpoint.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    ask = {"model": "auto", "stream": True, "messages": []}
+    assert httpx.post(url, json=ask).text == "data: 0\n\ndata: 1\n\ndata: 2\n\n"
+    remote.shutdown()
+    remote.server_close()  # the cluster stops; the next request must not fail
+    assert httpx.post(url, json=ask).text.startswith("data: 0")
+    assert remote_seen == ["deepseek-v4.1-flash"] and local_seen == [s.resolved_model.id]
+    endpoint.shutdown()
+    local.shutdown()
 
 
 def test_tunnel_binds_localhost_and_pins_host_keys_per_job(tmp_path: Path) -> None:

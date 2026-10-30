@@ -10,8 +10,8 @@ from typing import Any, NoReturn
 from . import install
 from .config import ClusterModel, OcaError, Settings, config_dir
 
-PROVIDER = "oca-local"
-CLUSTER = "oca-cluster"
+PROVIDER = "oca"
+MODEL = "auto"  # oca's router serves it with the best live server
 
 # OpenCode allows every tool by default; a local model once ran
 # `pip install --break-system-packages`. Ask for shell commands, except read-only
@@ -31,6 +31,9 @@ PERMISSION: dict[str, Any] = {
         ),
         **dict.fromkeys(["sudo *", "*--break-system-packages*", "rm -rf /*"], "deny"),
     },
+    # The web is reached from this machine: ask, as Claude Code does.
+    "webfetch": "ask",
+    "websearch": "ask",
 }
 
 
@@ -56,27 +59,18 @@ def _provider(name: str, port: int, model_id: str, label: str, context: int) -> 
 
 
 def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> dict[str, Any]:
-    """The local model; plus ``remote``, as the default, when the cluster answers."""
-    model = settings.resolved_model
+    """One model, ``oca/auto``; its label names ``remote`` when the cluster answers now.
+
+    The context limit is the local model's, so a session can always fall back to it.
+    """
+    local = settings.resolved_model
+    now = f"{remote.id} on UCloud" if remote else f"{local.id} ({settings.resolved_device})"
     providers = {
         PROVIDER: _provider(
-            "oca local (llama.cpp)",
-            settings.port,
-            model.id,
-            f"{model.id} ({settings.resolved_device})",
-            settings.resolved_context,
+            "oca", settings.port, MODEL, f"auto, now {now}", settings.resolved_context
         )
     }
-    ref = f"{PROVIDER}/{model.id}"
-    if remote:
-        providers[CLUSTER] = _provider(
-            "oca cluster (vLLM on UCloud)",
-            settings.cluster_port,
-            remote.id,
-            f"{remote.id} ({remote.gpus}x B200)",
-            remote.context,
-        )
-        ref = f"{CLUSTER}/{remote.id}"
+    ref = f"{PROVIDER}/{MODEL}"
     return {
         "$schema": "https://opencode.ai/config.json",
         "autoupdate": False,  # versions are pinned by oca

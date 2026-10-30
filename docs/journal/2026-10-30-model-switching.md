@@ -1,6 +1,6 @@
 # Model switching
 
-**Status:** OPEN. Sessions survive server restarts, but resuming one needs its last model to be up.
+**Status:** OPEN. Built: OpenCode sees one model, which oca's router serves from the best live server. Tested locally; to test against DeepSeek.
 
 ## Question
 Can a task continue on another model, as in Claude Code, when the server it started on stops?
@@ -10,5 +10,16 @@ Can a task continue on another model, as in Claude Code, when the server it star
 - It resumes a session with the session's last model. When that server is down, oca's config no longer lists the model, and OpenCode fails with `ProviderModelNotFoundError: Model not found: oca-cluster/qwen3.8-27b-fp8`.
 - Naming another model works. `opencode run --continue -m oca-local/qwen3.6-35b-a3b` resumed a cluster session on the local CPU model, which recalled the fix it had not made itself. In the TUI, `/models` does the same.
 
-## Idea
-One stable local endpoint and model name for OpenCode, routed by oca to the best live server. Sessions would then resume, and a task would carry on mid-way, when a server stops. Context limits differ (262k on the cluster, 64k locally), so a long session would need compaction on fallback.
+## Design (built 2026-10-30)
+- OpenCode's config has one provider and model, `oca/auto`, at `127.0.0.1:<port>`. A session never names a server, so it always resumes.
+- `oca.router` listens there. Each request goes to the UCloud server while its health check passes (cached 5 s), else to llama-server, now on `<port>+1` and started on demand. The `model` field is rewritten for the backend.
+- A refused connection to the cluster falls back to local within the same request. A stream cut mid-way ends that response; OpenCode retries it, and the retry goes local.
+- Every 60 s, while a job is known but not answering, the router runs `cluster.check`: it opens the tunnel once a queued job runs, and forgets ended jobs.
+- The context limit is the local model's (64k), so a session can always fall back. This costs DeepSeek's 262k; revisit with use.
+- Rejected: LiteLLM's proxy. It has fallbacks, but not starting llama-server or re-opening tunnels, and it is a large dependency for about 100 lines of routing.
+
+## Test
+- Offline: two fake servers; the "cluster" stops between two requests of one session, and the second request is served locally (`tests/test_oca.py`).
+- Local stack: OpenCode through the router fixed the bug-fix task on the CPU model (144 s cold).
+
+**Hypothesis for DeepSeek** (written before testing): the switch is invisible to OpenCode. The first request after a switch re-reads the session on the new server: about 1 s on DeepSeek, 1 to 2 min on the local CPU for a 10k-token session.

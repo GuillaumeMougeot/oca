@@ -15,7 +15,7 @@ oca            # first run downloads the model, starts it, opens OpenCode
 | `oca` / `oca run -- <opencode args>` | ensure everything is ready, then open OpenCode |
 | `oca config device cpu\|gpu\|auto` | where the local model runs (also `model`, `threads`, `context`, `port`) |
 | `oca models`, `oca pull [id]` | list and download models |
-| `oca start`, `oca stop`, `oca status`, `oca logs -f` | local server |
+| `oca start`, `oca stop`, `oca status`, `oca logs -f` | local server and oca's endpoint |
 | `oca uninstall [--keep-models] [--purge]` | remove everything oca installed, including the `oca` command |
 
 ## UCloud (optional)
@@ -31,9 +31,12 @@ oca cluster status | logs -f | extend 2 | down
 
 Jobs stop on their own after `cluster_idle` minutes without requests (default 60).
 
-Members of one UCloud project share servers. With the same `cluster_drive`, `oca cluster up` joins a running server instead of starting a second one, and `oca cluster down` then only leaves it.
+OpenCode sees one model, `oca/auto`, at `http://127.0.0.1:8080/v1`: the cluster model while it answers, else the local one. A session carries on across the switch, mid-task or when resumed.
 
-Sessions outlive servers. To resume one while its model is down, pick another model with `/models`.
+Members of one UCloud project share servers. With the same `cluster_drive`, `oca cluster up` joins a running server instead of starting a second one, and `oca cluster down` then only leaves it. To join, a member needs:
+1. `oca ucloud login --project <project id>`.
+2. An SSH key registered before the server started: `oca ucloud ssh-keys add ~/.ssh/id_ed25519.pub --title $(hostname)`.
+3. `oca config cluster_drive /<drive id>`, then `oca cluster up`.
 
 Data (models, binaries, logs) goes in `$OCA_DATA`. The default is `/data/$USER/oca` if that disk exists, otherwise `~/.local/share/oca`.
 

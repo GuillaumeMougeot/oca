@@ -31,6 +31,11 @@ def log_path() -> Path:
     return data_dir() / "logs" / "llama-server.log"
 
 
+def port(settings: Settings) -> int:
+    """llama-server listens one port above oca's router, which OpenCode talks to."""
+    return settings.port + 1
+
+
 def command(settings: Settings, exe: Path) -> list[str]:
     model = settings.resolved_model
     gpu = settings.resolved_device == "gpu"
@@ -39,7 +44,7 @@ def command(settings: Settings, exe: Path) -> list[str]:
         "--model", str(model_path(model)),
         "--alias", model.id,
         "--host", "127.0.0.1",
-        "--port", str(settings.port),
+        "--port", str(port(settings)),
         "--ctx-size", str(settings.resolved_context),
         "--n-gpu-layers", "999" if gpu else "0",
         "--jinja",
@@ -115,7 +120,7 @@ def start(settings: Settings, timeout: float = 900) -> State:
             env=environment(settings, exe),
             start_new_session=True,  # survives the terminal that started it
         )
-    state = State(proc.pid, settings.port, cmd)
+    state = State(proc.pid, port(settings), cmd)
     state_path().parent.mkdir(parents=True, exist_ok=True)
     state_path().write_text(json.dumps(asdict(state)))
     return _wait(state, proc, timeout)
