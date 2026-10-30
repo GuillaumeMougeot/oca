@@ -61,7 +61,8 @@ def run_one(exercise: Path, out: Path, variant: str | None, timeout: int) -> dic
         f"its names and signatures. Check your work with: {' '.join(TEST)}"
     )
     cmd = [str(install.opencode()), "run", *(["--variant", variant] if variant else []), prompt]
-    env = dict(os.environ, OPENCODE_CONFIG=str(agent.config_path()))
+    # OpenCode takes its project from $PWD, which subprocess does not update.
+    env = dict(os.environ, OPENCODE_CONFIG=str(agent.config_path()), PWD=str(work))
     start = time.monotonic()
     with (out / f"{exercise.name}.log").open("wb") as log, suppress(subprocess.TimeoutExpired):
         subprocess.run(

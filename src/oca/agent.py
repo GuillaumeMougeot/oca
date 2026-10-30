@@ -124,5 +124,6 @@ def launch(args: list[str], **env: str) -> NoReturn:
     exe = install.opencode()
     if exe is None:
         raise OcaError("OpenCode is not installed; run `oca setup`")
-    full = dict(os.environ, OPENCODE_CONFIG=str(config_path()), **env)
+    # OpenCode takes its project from $PWD, which a caller may not have updated.
+    full = dict(os.environ, OPENCODE_CONFIG=str(config_path()), PWD=os.getcwd(), **env)
     os.execve(exe, [str(exe), *args], full)
