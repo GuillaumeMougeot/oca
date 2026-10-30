@@ -5,13 +5,14 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import agent, cluster, install, router, server
+from . import agent, cluster, install, router, server, web
 from .config import (
     CLUSTER_MODELS,
     MODELS,
@@ -99,22 +100,24 @@ def run(ctx: typer.Context, yes: Yes = False) -> None:
     agent.launch(ctx.args)
 
 
-@app.command()
-def web(
+@app.command("web")
+def web_ui(
     port: Annotated[int, typer.Option(help="Port on this machine.")] = 4096,
+    stop: Annotated[bool, typer.Option("--stop", help="Stop the web server.")] = False,
     yes: Yes = False,
 ) -> None:
-    """OpenCode in a browser, e.g. on a phone through an SSH tunnel; password-protected."""
+    """OpenCode in a browser for this folder, e.g. on a phone; runs in the background."""
+    if stop:
+        console.print("Stopped." if web.stop() else "Not running.")
+        return
     settings = Settings.load()
     _ready(settings, yes)
-    password = agent.web_password()
+    state = web.start(port, Path.cwd())
     console.print(
-        f"OpenCode at http://127.0.0.1:{port} (user opencode, password {password}).\n"
-        f"From a phone or laptop: `ssh -N -L {port}:127.0.0.1:{port} <you>@<this machine>`, "
-        "then open the same address."
-    )
-    agent.launch(
-        ["web", "--hostname", "127.0.0.1", "--port", str(port)], OPENCODE_SERVER_PASSWORD=password
+        f"OpenCode for {state['project']} at http://127.0.0.1:{port}, user opencode, "
+        f"password {agent.web_password()}. It keeps running; `oca web --stop` ends it.\n"
+        f"From a phone: `ssh -N -L {port}:127.0.0.1:{port} <you>@<this machine>`, "
+        "then open that address."
     )
 
 
@@ -190,6 +193,8 @@ def status() -> None:
     table.add_row("opencode", str(install.opencode() or "missing"))
     pid = router.running()
     table.add_row("endpoint", f"pid {pid}, port {settings.port}" if pid else "stopped")
+    ui = web.running()
+    table.add_row("web", f"port {ui['port']}, {ui['project']}" if ui else "stopped")
     if state:
         health = "ready" if server.healthy(state.port) else "loading"
         table.add_row("server", f"pid {state.pid}, port {state.port}, {health}")
@@ -257,6 +262,7 @@ def uninstall(
         _confirm(yes, "Stop oca's UCloud jobs? Servers you joined keep running.")
         for kind in ("serve", "pull"):
             cluster.terminate(settings, kind)
+    web.stop()
     router.stop()
     server.stop()
     paths = install.owned_paths(keep_models=keep_models, purge=purge)

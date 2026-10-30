@@ -86,21 +86,20 @@ Everyone in the project with the same `cluster_drive` shares servers: `oca clust
 
 ## Phone and other machines
 
-Run `oca web` in a project. It serves OpenCode's web interface on this machine, on localhost only, and prints a password. The user name is `opencode`.
+`oca web` serves OpenCode's web interface for the current folder, in the background. It listens on localhost only and needs a password: the user is `opencode`, and `oca web` prints the password. It keeps running after you log out; `oca web --stop` ends it.
 
-From a phone, forward the port with any SSH app, over the university network or VPN:
+From a phone, one SSH command starts it if needed and opens the tunnel, with no tmux:
 
 ```bash
-ssh -N -L 4096:127.0.0.1:4096 you@workstation
+ssh -L 4096:127.0.0.1:4096 you@workstation 'cd ~/codes/PROJECT && ~/.local/bin/oca web && sleep infinity'
 ```
 
-Then open `http://127.0.0.1:4096` on the phone.
+Then open `http://127.0.0.1:4096` on the phone. `Ctrl+C` closes the tunnel, and the server keeps running for next time.
 
 - **Android:** Termux works (`pkg install openssh`). JuiceSSH's port forwarding needs its paid Pro pack.
-- **Through a jump host,** such as a VPS that reaches the workstation: `ssh -J you@vps -N -L 4096:127.0.0.1:4096 you@workstation`.
-
-- To keep the web server running after you log out: `tmux new -d -s oca-web oca web`.
-- To use the terminal UI over SSH instead: `tmux new -As oca oca`.
+- **Through a jump host,** such as a VPS that reaches the workstation: add `-J you@vps`.
+- **Another project:** the web interface opens the folder `oca web` started in. Run it in the other folder to switch; this replaces the running server. In OpenCode's own folder picker, clicking a folder selects it, so reach a subfolder by typing its path.
+- **The terminal UI over SSH** also works: `tmux new -As oca oca`.
 
 ## Settings
 

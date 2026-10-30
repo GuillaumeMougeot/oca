@@ -181,6 +181,14 @@ def test_install_release_is_atomic_and_rejects_traversal(
     assert not (tmp_path / "bin" / "escape").exists()
 
 
+def test_stale_web_state_is_ignored() -> None:
+    from oca import web
+
+    web.state_path().parent.mkdir(parents=True)
+    web.state_path().write_text('{"pid": 999999999, "port": 4096, "project": "/x"}')
+    assert web.running() is None and web.stop() is False
+
+
 def test_stale_state_is_ignored() -> None:
     server.state_path().parent.mkdir(parents=True)
     server.state_path().write_text('{"pid": 999999999, "port": 8080, "cmd": []}')

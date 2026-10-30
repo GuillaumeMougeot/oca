@@ -1,0 +1,5 @@
+# GitHub Pages: the repository's Markdown, rendered as is (README.md is the home page).
+title: oca
+description: A Claude Code–like coding agent built only from open-source software and open-weight models
+theme: jekyll-theme-primer
+exclude: [src, tests, eval, CLAUDE.md, uv.lock, pyproject.toml, install.sh]
