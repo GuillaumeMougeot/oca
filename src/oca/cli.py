@@ -214,9 +214,9 @@ def uninstall(
     """Remove oca: UCloud jobs, local server, data, settings and the `oca` command."""
     settings = Settings.load()
     if cluster.read("serve") or cluster.read("pull"):
-        _confirm(yes, "Terminate oca's UCloud jobs?")
+        _confirm(yes, "Stop oca's UCloud jobs? Servers you joined keep running.")
         for kind in ("serve", "pull"):
-            cluster.terminate(kind)
+            cluster.terminate(settings, kind)
     server.stop()
     paths = install.owned_paths(keep_models=keep_models, purge=purge)
     for p in paths:
@@ -258,7 +258,7 @@ def cluster_pull(model: ClusterModelArg = None, yes: Yes = False) -> None:
 
 @cluster_app.command("up")
 def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
-    """Serve a model on UCloud (reuses a running job) and make it `oca`'s default."""
+    """Serve a model on UCloud, or join a project member's server, and make it the default."""
     settings = Settings.load()
     m = _cluster_model(model, settings)
     job = cluster.read("serve")
@@ -270,6 +270,10 @@ def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
                 "UCloud does not know this machine's SSH key, so the tunnel would fail. "
                 f"Register it once: `oca ucloud ssh-keys add {key} --title $(hostname)`"
             )
+        if shared := cluster.join(settings, m):
+            job, starter = shared
+            console.print(f"Joining {m.id}, started by {starter} (job {job.job_id}).")
+    if job is None:
         if m.size_gb > 100 and not cluster.weights_ready(settings, m):
             raise OcaError(
                 f"{m.id} ({m.size_gb:g} GB) is not on the drive yet. Run `oca cluster pull "
@@ -293,10 +297,15 @@ def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
 
 @cluster_app.command("down")
 def cluster_down() -> None:
-    """Stop the serve job and its tunnel; `oca` goes back to the local model."""
-    stopped = cluster.terminate("serve")
-    agent.write_config(Settings.load())
-    console.print("Stopped." if stopped else "Nothing was running.")
+    """Stop the serve job (or leave a joined one); `oca` goes back to the local model."""
+    settings = Settings.load()
+    job = cluster.read("serve")
+    cluster.terminate(settings, "serve")
+    agent.write_config(settings)
+    if job is None:
+        console.print("Nothing was running.")
+    else:
+        console.print("Stopped." if job.owner else "Left; the server keeps running for others.")
 
 
 @cluster_app.command("status")
@@ -309,11 +318,12 @@ def cluster_status() -> None:
         if job is None:
             continue
         status = cluster.job_status(job)
-        left = ""
+        left = "" if job.owner else ", joined"
         expires = status.get("expiresAt")
         if status.get("state") == "RUNNING" and isinstance(expires, int | float):
-            left = f", {(expires / 1000 - time.time()) / 3600:.1f} h left"
-        table.add_row(kind, f"{job.model}, job {job.job_id}, {status.get('state')}{left}")
+            left += f", {(expires / 1000 - time.time()) / 3600:.1f} h left"
+        state = status.get("state", "state hidden")
+        table.add_row(kind, f"{job.model}, job {job.job_id}, {state}{left}")
     if cluster.read("serve"):
         table.add_row("server", "ready" if cluster.healthy(settings) else "not reachable")
     console.print(table if table.rows else "No oca jobs.")
@@ -347,6 +357,8 @@ def cluster_extend(hours: Annotated[int, typer.Argument()] = 1) -> None:
     job = cluster.read("serve")
     if job is None:
         raise OcaError("no serve job")
+    if not job.owner:
+        raise OcaError("only the member who started this server can extend it")
     cluster.extend(job, hours)
     console.print(f"Extended job {job.job_id} by {hours} h.")
 

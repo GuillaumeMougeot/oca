@@ -4,14 +4,19 @@ Remote layout on the configured drive (``cluster_drive``):
 
     <drive>/hf/<org>/<repo>/   weights in Hugging Face layout, shared by every job
     <drive>/oca/               job scripts, logs, caches and the vLLM venv
+    <drive>/oca/servers/       one listing per running server, so members can join it
 
 Jobs run the ``terminal-almalinux`` app (it accepts SSH) as batch jobs: the job ends when
 its script exits, and the serve script exits after ``cluster_idle`` minutes without
 requests, so a forgotten session stops spending GPU-hours on its own.
+
+UCloud installs every project member's registered SSH key in SSH-enabled jobs, so a
+member joins a listed server by opening their own tunnel. Only its starter stops it.
 """
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import re
@@ -48,6 +53,8 @@ class Job:
     model: str
     tag: str
     tunnel_pid: int = 0
+    owner: bool = True  # False: joined another member's server
+    endpoint: str = ""  # SSH "user@host:port", once the job advertised it
 
 
 # -- local state ---------------------------------------------------------------------------
@@ -131,6 +138,7 @@ def serve_command(model: ClusterModel) -> list[str]:
 
 def serve_script(model: ClusterModel, settings: Settings, tag: str) -> str:
     venv = f"/work/oca/venvs/vllm-{VLLM_VERSION}"
+    listing = f"/work/oca/servers/{model.id}.json"
     health = f"http://127.0.0.1:{REMOTE_PORT}"
     env = " ".join(f"{k}={shlex.quote(v)}" for k, v in model.env)
     return _wrap(
@@ -189,6 +197,8 @@ def serve_script(model: ClusterModel, settings: Settings, tag: str) -> str:
             "  fi",
             "done",
             'wait "$pid"; code=$?',
+            # Unlist this server, unless a newer one replaced the listing.
+            f"grep -qs '\"{tag}\"' {listing} && rm -f {listing}",
             '[ "$stopped" = 1 ] && exit 0',
             'exit "$code"',
         ],
@@ -312,11 +322,67 @@ def submit_serve(settings: Settings, model: ClusterModel) -> Job:
     return _submit(settings, job, serve_script(model, settings, job.tag), model.gpus)
 
 
-def job_status(job: Job) -> dict[str, Any]:
-    from ucloud_api import Jobs
+def _listing(settings: Settings, model_id: str) -> str:
+    return f"{_drive(settings)}/oca/servers/{model_id}.json"
+
+
+def publish(settings: Settings, job: Job) -> None:
+    """List our server on the drive so other project members' oca can join it."""
+    from ucloud_api import Files, Transfer
+    from ucloud_api.exceptions import APIError
+
+    entry = {
+        **{k: getattr(job, k) for k in ("job_id", "model", "tag", "endpoint")},
+        "started_by": f"{getpass.getuser()}@{socket.gethostname()}",
+    }
+    local = data_dir() / "run" / f"listing-{job.model}.json"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text(json.dumps(entry))
+    with _client() as client:
+        with suppress(APIError):
+            Files(client).mkdir(f"{_drive(settings)}/oca/servers", conflict_policy="REJECT")
+        Transfer(client).upload(local, _listing(settings, job.model))
+
+
+def join(settings: Settings, model: ClusterModel) -> tuple[Job, str] | None:
+    """Adopt the server another member listed for ``model``; returns it and its starter."""
+    from ucloud_api import Jobs, Transfer
+    from ucloud_api.exceptions import APIError, UCloudError
 
     with _client() as client:
-        status = Jobs(client).retrieve(job.job_id, include_updates=False).get("status", {})
+        try:
+            entry = json.loads(Transfer(client).read_bytes(_listing(settings, model.id)))
+            job = Job("serve", entry["job_id"], model.id, entry["tag"], 0, False, entry["endpoint"])
+        except (UCloudError, ValueError, KeyError):
+            return None
+        with suppress(APIError):  # members may not see each other's jobs; the tunnel will tell
+            if Jobs(client).state(job.job_id).is_terminal:
+                return None
+    _write(job, "serve")
+    return job, str(entry.get("started_by", "another member"))
+
+
+def _unlist(settings: Settings, job: Job) -> None:
+    from ucloud_api import Files, Transfer
+    from ucloud_api.exceptions import UCloudError
+
+    path = _listing(settings, job.model)
+    with _client() as client, suppress(UCloudError, ValueError):
+        if json.loads(Transfer(client).read_bytes(path)).get("tag") == job.tag:
+            Files(client).trash(path)
+
+
+def job_status(job: Job) -> dict[str, Any]:
+    from ucloud_api import Jobs
+    from ucloud_api.exceptions import APIError
+
+    try:
+        with _client() as client:
+            status = Jobs(client).retrieve(job.job_id, include_updates=False).get("status", {})
+    except APIError:
+        if job.owner:
+            raise
+        return {}  # members may not see each other's jobs
     return status if isinstance(status, dict) else {}
 
 
@@ -344,8 +410,11 @@ def extend(job: Job, hours: int) -> None:
         Jobs(client).extend(job.job_id, hours=hours)
 
 
-def terminate(kind: str) -> bool:
-    """Stop a job and its tunnel; forget it. Returns False when there was none."""
+def terminate(settings: Settings, kind: str) -> bool:
+    """Close the tunnel and forget the job; stop it too if we started it.
+
+    Returns False when there was none.
+    """
     from ucloud_api import Jobs
     from ucloud_api.exceptions import APIError
 
@@ -353,8 +422,11 @@ def terminate(kind: str) -> bool:
     if job is None:
         return False
     stop_tunnel(job)
-    with _client() as client, suppress(APIError):  # already finished is fine
-        Jobs(client).terminate(job.job_id)
+    if job.owner:
+        with _client() as client, suppress(APIError):  # already finished is fine
+            Jobs(client).terminate(job.job_id)
+        if kind == "serve":
+            _unlist(settings, job)
     _write(None, kind)
     return True
 
@@ -395,17 +467,24 @@ def ensure_tunnel(settings: Settings, job: Job, timeout: float = 300) -> None:
     if _alive(job.tunnel_pid) and _port_open(settings.cluster_port):
         return
     stop_tunnel(job)
-    with _client() as client:
-        jobs = Jobs(client)
-        deadline = time.monotonic() + timeout
-        while (endpoint := jobs.ssh_endpoint(job.job_id)) is None:
-            if time.monotonic() > deadline:
-                raise OcaError(f"job {job.job_id} advertised no SSH endpoint")
-            time.sleep(5)
+    if not job.endpoint:
+        with _client() as client:
+            jobs = Jobs(client)
+            deadline = time.monotonic() + timeout
+            while (found := jobs.ssh_endpoint(job.job_id)) is None:
+                if time.monotonic() > deadline:
+                    raise OcaError(f"job {job.job_id} advertised no SSH endpoint")
+                time.sleep(5)
+        job.endpoint = f"{found.user}@{found.host}:{found.port}"
+        _write(job, job.kind)
+        if job.owner and job.kind == "serve":
+            publish(settings, job)
+    login, port = job.endpoint.rsplit(":", 1)
+    user, host = login.split("@", 1)
     log = data_dir() / "logs" / "tunnel.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     known = data_dir() / "run" / f"known_hosts-{job.job_id}"
-    cmd = tunnel_command(endpoint.user, endpoint.host, endpoint.port, settings.cluster_port, known)
+    cmd = tunnel_command(user, host, int(port), settings.cluster_port, known)
     with log.open("ab") as fh:
         proc = subprocess.Popen(
             cmd,
@@ -418,8 +497,8 @@ def ensure_tunnel(settings: Settings, job: Job, timeout: float = 300) -> None:
         if proc.poll() is not None:
             if "Permission denied" in log.read_text(errors="replace")[-2000:]:
                 raise OcaError(
-                    "UCloud rejected this machine's SSH key. Register it (see `oca cluster up`), "
-                    "then restart: jobs only learn keys at start."
+                    "UCloud rejected this machine's SSH key. Register it (see `oca cluster up`); "
+                    "a job only learns the keys registered before it started."
                 )
             raise OcaError(f"SSH tunnel failed; see {log}")
         if _port_open(settings.cluster_port):
@@ -450,16 +529,27 @@ def check(settings: Settings, job: Job) -> str | None:
     Re-opens the tunnel if needed. A finished job is forgotten and raises.
     """
     from ucloud_api import Jobs, JobState
+    from ucloud_api.exceptions import APIError
 
-    with _client() as client:
-        state = Jobs(client).state(job.job_id)
+    try:
+        with _client() as client:
+            state = Jobs(client).state(job.job_id)
+    except APIError:
+        if job.owner:
+            raise
+        state = JobState.RUNNING  # members may not see each other's jobs; the tunnel will tell
     if state.is_terminal:
         _write(None, job.kind)
         tail = log_tail(settings, job)
         raise OcaError(f"job {job.job_id} ended ({state.value}). Log tail:\n{tail}")
     if state != JobState.RUNNING:
         return str(state.value).lower().replace("_", " ")
-    ensure_tunnel(settings, job)
+    try:
+        ensure_tunnel(settings, job)
+    except OcaError:
+        if not job.owner:
+            _write(None, job.kind)  # the shared server is gone or refuses us: stop trying it
+        raise
     if healthy(settings):
         return None
     last = log_tail(settings, job, lines=1)

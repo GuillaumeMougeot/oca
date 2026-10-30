@@ -6,7 +6,9 @@ import io
 import os
 import subprocess
 import tarfile
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -143,6 +145,7 @@ def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:
         assert f"--served-model-name {model.id}" in script
         assert "--host 127.0.0.1" in script  # reachable only through the SSH tunnel
         assert f"vllm=={config.VLLM_VERSION}" in script
+        assert f"rm -f /work/oca/servers/{model.id}.json" in script  # unlisted on exit
 
 
 def test_cluster_provider_becomes_default_when_reachable() -> None:
@@ -162,6 +165,79 @@ def test_tunnel_binds_localhost_and_pins_host_keys_per_job(tmp_path: Path) -> No
     assert "127.0.0.1:8001:127.0.0.1:8000" in cmd
     assert f"UserKnownHostsFile={tmp_path / 'kh'}" in cmd
     assert "BatchMode=yes" in cmd  # never hangs on a password prompt
+
+
+@pytest.fixture
+def ucloud(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """A fake UCloud: drive files, the job state, and the jobs terminated."""
+    import ucloud_api
+    from ucloud_api.exceptions import APIError
+
+    from oca import cluster
+
+    world: dict[str, Any] = {"files": {}, "state": "RUNNING", "terminated": []}
+
+    class Transfer:
+        def __init__(self, client: object) -> None: ...
+
+        def read_bytes(self, remote: str) -> bytes:
+            if remote not in world["files"]:
+                raise APIError("not found", status_code=404)
+            return bytes(world["files"][remote])
+
+        def upload(self, local: Path, remote: str) -> None:
+            world["files"][remote] = local.read_bytes()
+
+    class Files:
+        def __init__(self, client: object) -> None: ...
+
+        def mkdir(self, path: str, conflict_policy: str) -> None: ...
+
+        def trash(self, path: str) -> None:
+            del world["files"][path]
+
+    class Jobs:
+        def __init__(self, client: object) -> None: ...
+
+        def state(self, job_id: str) -> ucloud_api.JobState:
+            return ucloud_api.JobState(world["state"])
+
+        def terminate(self, job_id: str) -> None:
+            world["terminated"].append(job_id)
+
+    monkeypatch.setattr(cluster, "_client", lambda: nullcontext(None))
+    for fake in (Transfer, Files, Jobs):
+        monkeypatch.setattr(ucloud_api, fake.__name__, fake)
+    return world
+
+
+def test_members_join_a_listed_server_and_leaving_does_not_stop_it(
+    ucloud: dict[str, Any],
+) -> None:
+    from oca import cluster
+
+    s, model = Settings(cluster_drive="/9"), config.CLUSTER_MODELS["deepseek-v4.1-flash"]
+    started = cluster.Job("serve", "42", model.id, "serve-x", endpoint="ucloud@h:2211")
+    cluster.publish(s, started)  # the starter's machine lists it
+    joined = cluster.join(s, model)  # another member's machine
+    assert joined is not None
+    job, starter = joined
+    assert (job.job_id, job.owner, job.endpoint) == ("42", False, "ucloud@h:2211")
+    assert "@" in starter
+    assert cluster.terminate(s, "serve") and ucloud["terminated"] == []
+    ucloud["state"] = "SUCCESS"
+    assert cluster.join(s, model) is None  # an ended server is not joined
+
+
+def test_starter_stops_and_unlists_its_server(ucloud: dict[str, Any]) -> None:
+    from oca import cluster
+
+    s = Settings(cluster_drive="/9")
+    job = cluster.Job("serve", "42", "deepseek-v4.1-flash", "serve-x", endpoint="u@h:1")
+    cluster.publish(s, job)
+    cluster._write(job, "serve")
+    assert cluster.terminate(s, "serve")
+    assert ucloud["terminated"] == ["42"] and ucloud["files"] == {}
 
 
 def test_uninstall_only_deletes_what_oca_created(tmp_path: Path) -> None:
