@@ -214,7 +214,7 @@ def _drive(settings: Settings) -> str:
     if not settings.cluster_drive:
         raise OcaError(
             "no UCloud drive configured. List drives with `oca ucloud files drives`, then "
-            "e.g. `oca config cluster_drive /12383018`"
+            "`oca config cluster_drive /<drive id>`"
         )
     return settings.cluster_drive.rstrip("/")
 
@@ -241,7 +241,9 @@ def _spec(settings: Settings, name: str, script: str, gpus: int, hours: int) -> 
     )
 
 
-PULL_HOURS = 8  # a 510 GB download fits; an unfinished one resumes on the next pull
+# 510 GB took 14 min on 2 vCPUs; a stalled download costs at most 4 core-hours and
+# resumes on the next pull.
+PULL_HOURS = 2
 
 
 def _submit(settings: Settings, job: Job, script: str, gpus: int) -> Job:

@@ -19,15 +19,16 @@ Goal: installing it is as easy as uv or Claude Code, plus one model download. oc
 
 ## Invariants
 
-- Heavy files (models, binaries, logs) go under `data_dir()` (here `/data/$USER/oca`), never in the repo or `$HOME`.
+- Heavy files (models, binaries, logs) go under `data_dir()`, never in the repo.
 - Pin every external version (llama.cpp tag, OpenCode version, model file). Bump deliberately and journal why.
 - Open-source software and open-weight models only. Record each license in the ROADMAP table.
 - Never touch the user's global OpenCode config. oca passes its own through `OPENCODE_CONFIG`.
 - Keep the agent permission rules in `agent.py`. Without them, a local model ran `pip install --break-system-packages` on the host ([journal](docs/journal/2026-10-29-local-mvp.md)).
-- The local GPU is shared with another user. Check `nvidia-smi` before using `device=gpu`. This host uses `cpu` for now.
 - UCloud:
-  - Ask the owner before spending GPU-hours.
-  - The `/models` drive (`/12383018`) is tight: about 1 TB left for the whole project.
+  - Ask before spending GPU-hours or core-hours. Use the smallest product that does the job.
+  - Storage quota is per project: check `oca ucloud quota` before pulling weights.
+  - Every project member's registered SSH key can log into SSH-enabled jobs.
+  - `nproc` in a job counts the host's CPUs, not the product's: size thread pools from the product.
   - Read job logs, not job status.
   - Full B200s can be fully booked, and a job can sit IN_QUEUE for a long time.
   - ucloud-api has its own traps; see its README.
@@ -40,7 +41,7 @@ Goal: installing it is as easy as uv or Claude Code, plus one model download. oc
 - Tests run offline: mock network, processes and GPU.
 - Fewer, shorter docs. Word count matters, in docs and in messages.
 
-## Owner preferences
+## Maintainer preferences
 
 - Journal everything: `docs/journal/YYYY-MM-DD-topic.md`, indexed in `docs/journal/README.md`.
 - Plan and discuss before sizeable changes. Give a recommendation, not a survey.

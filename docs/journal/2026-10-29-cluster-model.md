@@ -1,6 +1,6 @@
 # Cluster model
 
-**Status:** OPEN. Recommended: DeepSeek-V4.1-Flash-1017 with its original weights on 2×B200 with vLLM. Needs the owner's go-ahead: 510 GB of the roughly 1 TB left, and 2 GPU-hours per hour.
+**Status:** OPEN. Chosen: DeepSeek-V4.1-Flash-1017, original weights, 2×B200, vLLM. Weights downloaded; validation pending.
 
 ## Question
 What is the strongest open-weight coder we can serve reliably and fast on UCloud B200s?
@@ -26,10 +26,14 @@ DeepSWE v1.1 is the only benchmark that appears on most of the cards. The harnes
 | Speed | Unknown; llama.cpp has no sparse-MLA kernels | FlashInfer sparse MLA plus the DSpark drafter (5 tokens per round) |
 
 ## Decision rationale
-- The owner's priority is speed, and coding effort was declared not to matter.
+- The priority is speed; coding effort does not matter.
 - The original weights on vLLM win on both counts. There is also no quantization doubt and no 4-day-old code path.
 - The 2-bit GGUF stays a fallback if GPU-hours become the constraint.
 
+## Pull (2026-10-30)
+- 510 GB in 14 min on 2 vCPUs (about 600 MB/s, peaks of 800): under 0.5 core-hours.
+- `hf` used all of its 2 vCPUs. More vCPUs would finish sooner for about the same core-hours.
+- The last two files are 101.5 GB each, so the end runs on two streams.
+
 ## Next
-1. Pull the original weights from a 2-vCPU job: 16 CPU core-hours worst case.
-2. Validate on 2×B200 against the Qwen3.8-27B smoke-test baseline.
+Validate on 2×B200 against the Qwen3.8-27B smoke-test baseline, with OpenCode through the tunnel.

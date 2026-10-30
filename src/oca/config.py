@@ -160,7 +160,7 @@ class Settings:
     port: int = 8080
     threads: int = 0  # 0: llama.cpp picks
     context: int = 0  # 0: the model's default
-    cluster_drive: str = ""  # UCloud drive for weights and job files, e.g. "/12383018"
+    cluster_drive: str = ""  # UCloud drive for weights and job files, e.g. "/1234567"
     cluster_model: str = "qwen3.8-27b-fp8"
     cluster_hours: int = 8  # job time allocation
     cluster_idle: int = 60  # minutes without requests before the job stops itself

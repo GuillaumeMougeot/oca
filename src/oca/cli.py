@@ -310,7 +310,8 @@ def cluster_status() -> None:
             continue
         status = cluster.job_status(job)
         left = ""
-        if isinstance(expires := status.get("expiresAt"), int | float):
+        expires = status.get("expiresAt")
+        if status.get("state") == "RUNNING" and isinstance(expires, int | float):
             left = f", {(expires / 1000 - time.time()) / 3600:.1f} h left"
         table.add_row(kind, f"{job.model}, job {job.job_id}, {status.get('state')}{left}")
     if cluster.read("serve"):

@@ -1,6 +1,6 @@
 # oca: Open Coding Agent
 
-A Claude Code–like coding agent built only from open-source software and open-weight models. oca installs and wires up:
+A Claude Code–like coding agent built only from open-source software and open-weight models. OpenCode alone needs a hosted model API; oca adds the model servers and wires them in:
 - [OpenCode](https://opencode.ai) as the agent,
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) for local models,
 - [vLLM](https://github.com/vllm-project/vllm) on [UCloud](https://cloud.sdu.dk) B200s, through [ucloud-api](https://github.com/GuillaumeMougeot/ucloud-api).
@@ -22,7 +22,8 @@ oca            # first run downloads the model, starts it, opens OpenCode
 
 ```bash
 oca ucloud login                        # once: paste the refresh token (see ucloud-api)
-oca config cluster_drive /12383018      # drive for weights and job files
+oca ucloud files drives                 # pick a project drive for weights and job files
+oca config cluster_drive /<drive id>
 oca cluster pull deepseek-v4.1-flash    # big weights: cheap CPU job, no GPU-hours
 oca cluster up                          # B200 job + SSH tunnel; `oca` now uses it
 oca cluster status | logs -f | extend 2 | down

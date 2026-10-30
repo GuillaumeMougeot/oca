@@ -1,11 +1,11 @@
 # Cluster smoke test
 
-**Status:** OPEN. Serving works on a B200 at 111 tok/s, and the job is ready 4.5 min after it starts. Only the tunnel is still untested: it needs this machine's SSH key registered on UCloud, which the owner must do.
+**Status:** RESOLVED. Each hop works: vLLM serves on a B200 at 111 tok/s, ready 4.5 min after the job starts, and the tunnel opens in 1.1 s. OpenCode through the tunnel is tested with DeepSeek ([cluster model](2026-10-29-cluster-model.md)).
 
 ## Question
 Does the whole cluster path work end to end, and how fast is it? The path is:
 1. A `terminal-almalinux` batch job on 1×B200.
-2. vLLM installed with uv onto the drive, and weights on `/12383018/hf`.
+2. vLLM installed with uv onto the drive, and weights on `<drive>/hf`.
 3. An SSH tunnel to `127.0.0.1:8001`.
 4. OpenCode.
 
@@ -16,7 +16,7 @@ Model: Qwen3.8-27B-FP8, 31 GB, Apache-2.0. The cap is `cluster_hours = 1`.
 - The first start is ready within 15 min. Later starts are faster thanks to the caches on the drive.
 - 80 to 120 tok/s single-stream; the bug-fix task in under 20 s.
 
-## Job 12438889
+## First job
 **Queue:** 65 min IN_QUEUE ("no machines available"); about 7 GPU-minutes used.
 
 **Confirmed working:**
@@ -28,12 +28,12 @@ Model: Qwen3.8-27B-FP8, 31 GB, Apache-2.0. The cap is `cluster_hours = 1`.
 **Failed:**
 1. **FlashInfer kernels:** FlashInfer JIT-compiles a decode kernel and needs `nvcc`; the app has no CUDA toolkit.
    - Fix: install the matching prebuilt `flashinfer-cubin` and `flashinfer-jit-cache` wheels from flashinfer.ai.
-2. **SSH tunnel:** `Permission denied (publickey)`. This workstation's ed25519 key is not among the three keys registered on UCloud (all RSA, from other machines).
-   - Fix: the owner runs `oca ucloud ssh-keys add ~/.ssh/id_ed25519.pub --title <name>`. The agent was not allowed to add account access.
+2. **SSH tunnel:** `Permission denied (publickey)`. The local ed25519 key was not registered on UCloud.
+   - Fix: the user runs `oca ucloud ssh-keys add ~/.ssh/id_ed25519.pub --title <name>`. The agent was not allowed to add account access.
    - `oca cluster up` now checks the key before submitting.
 3. **Misleading status:** UCloud reported the job as SUCCESS even though vLLM had failed, confirming "read logs, not status".
 
-## Job 12438944
+## Second job
 **Queue:** 1.5 min IN_QUEUE; about 5 GPU-minutes used.
 
 **The FlashInfer fix works.** From job start to `oca: ready` took 4.5 min:
@@ -47,3 +47,6 @@ Model: Qwen3.8-27B-FP8, 31 GB, Apache-2.0. The cap is `cluster_hours = 1`.
 **Not yet measured:**
 - the bug-fix task through the tunnel,
 - Qwen3.8's MTP head in vLLM (the recipe reports 85% acceptance at FP8).
+
+## Tunnel (2026-10-30)
+Tested at no GPU cost, on the CPU job that pulled DeepSeek with SSH enabled. oca's `ensure_tunnel` opened in 1.1 s and reached a test HTTP server on the job's port 8000.

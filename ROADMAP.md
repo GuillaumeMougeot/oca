@@ -1,6 +1,6 @@
 # Roadmap
 
-**Last updated:** 2026-10-29
+**Last updated:** 2026-10-30
 
 ## Architecture
 
@@ -13,7 +13,7 @@
  local :8080                 cluster :8001 (SSH tunnel)
  llama.cpp llama-server      vLLM, UCloud B200 job    
  cpu: Qwen3.6-35B-A3B        DeepSeek-V4.1-Flash (2×B200)
- gpu: Qwen3.8-27B            weights on /models drive
+ gpu: Qwen3.8-27B            weights on a project drive
 ```
 
 ## Choices
@@ -21,11 +21,11 @@
 | Layer | Pick | License | Rejected |
 |---|---|---|---|
 | Agent | OpenCode 1.19.5 | MIT | Pi (minimal; keep in mind for a custom harness), Hermes/OpenClaw (personal assistants) |
-| Local engine | llama.cpp b11982 | MIT | Ollama (an extra daemon), vLLM locally (fixed VRAM fraction on a shared GPU) |
+| Local engine | llama.cpp b11982 | MIT | Ollama (an extra daemon); vLLM locally: slower on CPU, and on GPU the whole model must fit in VRAM (benchmark in phase 3) |
 | Local model, cpu | Qwen3.6-35B-A3B Q4 with MTP (23 GB, 20 tok/s) | Apache-2.0 | Dense models: too slow on CPU |
 | Local model, gpu | Qwen3.8-27B Q4 (18 GB) | Apache-2.0 | – |
 | Cluster engine | vLLM 0.32 | Apache-2.0 | SGLang (a viable fallback) |
-| Cluster model | Proposed: DeepSeek-V4.1-Flash-1017 original weights (510 GB, 2×B200); smoke test: Qwen3.8-27B-FP8 ([journal](docs/journal/2026-10-29-cluster-model.md)) | MIT; Apache-2.0 | ISTA 2-bit GGUF on 1×B200 (unverified agentic quality, new llama.cpp path), GLM-5.3-Flash, Kimi |
+| Cluster model | DeepSeek-V4.1-Flash-1017 original weights (510 GB, 2×B200); smoke test: Qwen3.8-27B-FP8 ([journal](docs/journal/2026-10-29-cluster-model.md)) | MIT; Apache-2.0 | ISTA 2-bit GGUF on 1×B200 (unverified agentic quality, new llama.cpp path), GLM-5.3-Flash, Kimi |
 | Router, automation | none | – | LiteLLM (OpenCode already does multi-provider), n8n (fair-code) |
 
 ## Install UX (decided)
@@ -37,10 +37,10 @@
 ## Phases
 
 1. **Local MVP.** Done 2026-10-29. CPU run end to end ([journal](docs/journal/2026-10-29-local-mvp.md)).
-2. **Cluster.** In progress: `oca cluster` and `oca uninstall` written. Serving verified on a B200 (111 tok/s). Blocked on registering this machine's SSH key on UCloud (owner) ([journal](docs/journal/2026-10-29-cluster-smoke-test.md)).
-   - Smoke test: Qwen3.8-27B-FP8 on 1×B200.
-   - Then, if the owner approves: pull DeepSeek-V4.1-Flash-1017 and validate it on 2×B200.
-3. **Eval.** A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults.
+2. **Cluster.** In progress. Verified: vLLM on a B200 (111 tok/s), the SSH tunnel, the DeepSeek pull ([journal](docs/journal/2026-10-29-cluster-smoke-test.md)).
+   - Next: validate DeepSeek-V4.1-Flash-1017 on 2×B200, with OpenCode through the tunnel.
+   - Then: one server shared by project members ([journal](docs/journal/2026-10-30-shared-server.md)).
+3. **Eval.** A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU.
 4. **Phone.** `opencode web` on localhost, reached by SSH tunnel or WireGuard, or tmux over SSH.
 5. **Polish.**
    - Publish `install.sh` and test it in a clean container in CI.
