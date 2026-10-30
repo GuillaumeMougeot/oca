@@ -183,7 +183,6 @@ def test_permissions_allow_work_ask_before_damage_deny_administration() -> None:
     assert bash["sudo *"] == bash["*--break-system-packages*"] == "deny"
     assert list(bash)[-1] in {k for k, v in bash.items() if v == "deny"}  # denies win
     assert cfg["permission"]["external_directory"] == cfg["permission"]["webfetch"] == "ask"
-    assert "AGENT.md" in cfg["instructions"]
 
 
 def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:

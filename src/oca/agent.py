@@ -93,8 +93,6 @@ def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> d
         "share": "disabled",
         "enabled_providers": list(providers),  # open models only, no hosted fallbacks
         "permission": PERMISSION,
-        # AGENTS.md, and CLAUDE.md without one, load natively; AGENT.md is a common variant.
-        "instructions": ["AGENT.md"],
         "provider": providers,
         "model": ref,
         "small_model": ref,

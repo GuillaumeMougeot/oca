@@ -29,7 +29,7 @@ OpenCode sees one model, `oca/auto`: the UCloud model while a server answers, el
 - DeepSeek maps them to a budget of 50, 62, 75 (its default) and 100.
 - The local model only has thinking on or off.
 
-**Project instructions:** the agent reads `AGENTS.md` from the project and its parent directories, or `CLAUDE.md` where there is none, plus `AGENT.md` and your global `~/.claude/CLAUDE.md`.
+**Project instructions:** the agent reads `AGENTS.md` from the project and its parent directories, or `CLAUDE.md` where there is none, plus your global `~/.claude/CLAUDE.md`. OpenCode does this itself; checked through oca with a codeword the model answered without opening a file.
 
 **Permissions:** like Claude Code's auto mode.
 - Allowed: everything else.
