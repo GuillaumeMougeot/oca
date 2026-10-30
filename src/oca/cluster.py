@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from .config import VLLM_VERSION, ClusterModel, OcaError, Settings, data_dir
+from .config import VLLM_VERSION, ClusterModel, OcaError, Settings, data_dir, process_alive
 
 if TYPE_CHECKING:  # ucloud_api is imported lazily: it is slow and only needed here
     from ucloud_api import UCloudClient
@@ -457,10 +457,7 @@ def tunnel_command(
 
 
 def _alive(pid: int) -> bool:
-    try:
-        return pid > 0 and b"ssh" in Path(f"/proc/{pid}/cmdline").read_bytes()
-    except OSError:
-        return False
+    return process_alive(pid, "ssh")
 
 
 def _port_open(port: int) -> bool:

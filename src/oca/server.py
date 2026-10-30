@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 
 from . import install
-from .config import OcaError, Settings, data_dir, model_path
+from .config import OcaError, Settings, data_dir, model_path, process_alive
 
 
 @dataclass
@@ -76,10 +76,7 @@ def read_state() -> State | None:
 
 
 def _alive(pid: int) -> bool:
-    try:
-        return "llama-server" in Path(f"/proc/{pid}/cmdline").read_text()
-    except OSError:
-        return False
+    return process_alive(pid, "llama-server")
 
 
 def healthy(port: int) -> bool:

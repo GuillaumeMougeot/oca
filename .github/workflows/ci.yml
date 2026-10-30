@@ -32,3 +32,15 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           oca status
           oca models
+          find "$HOME/.local/share/oca/bin" -name llama-server -type f -exec {} --version \;
+          find "$HOME/.local/share/oca/bin" -name opencode -type f -exec {} --version \;
+  install-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: OCA_SOURCE="$GITHUB_WORKSPACE" sh install.sh
+      - run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          oca status
+          find "$HOME/Library/Application Support/oca/bin" -name llama-server -type f -exec {} --version \;
+          find "$HOME/Library/Application Support/oca/bin" -name opencode -type f -exec {} --version \;

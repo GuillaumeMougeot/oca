@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -29,16 +30,21 @@ from .config import (
 GITHUB = "https://github.com"
 
 
-def arch() -> str:
-    machine = platform.machine().lower()
-    if platform.system() != "Linux" or machine not in ("x86_64", "amd64", "aarch64", "arm64"):
-        raise OcaError(f"unsupported platform {platform.system()}/{machine}: Linux x64/arm64 only")
-    return "x64" if machine in ("x86_64", "amd64") else "arm64"
+def platform_id() -> tuple[str, str]:
+    """This machine as release assets name it: ("linux" or "macos", "x64" or "arm64")."""
+    system, machine = platform.system(), platform.machine().lower()
+    os_name = {"Linux": "linux", "Darwin": "macos"}.get(system)
+    cpu = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(machine)
+    if os_name is None or cpu is None:
+        raise OcaError(f"unsupported platform {system}/{machine}: Linux or macOS, x64 or arm64")
+    return os_name, cpu
 
 
-def llama_assets(cpu_arch: str, cuda: bool) -> list[str]:
-    """Release tarballs for this machine. The CUDA build also runs CPU-only."""
+def llama_assets(os_name: str, cpu_arch: str, cuda: bool) -> list[str]:
+    """Release tarballs for this machine. The CUDA build also runs CPU-only; macOS has Metal."""
     tag = LLAMA_CPP_TAG
+    if os_name == "macos":
+        return [f"llama-{tag}-bin-macos-{cpu_arch}.tar.gz"]
     if not cuda:
         return [f"llama-{tag}-bin-ubuntu-{cpu_arch}.tar.gz"]
     cu = "12.8" if cpu_arch == "x64" else "13.4"
@@ -48,8 +54,14 @@ def llama_assets(cpu_arch: str, cuda: bool) -> list[str]:
     ]
 
 
+def opencode_asset(os_name: str, cpu_arch: str) -> str:
+    if os_name == "macos":
+        return f"opencode-darwin-{cpu_arch}.zip"
+    return f"opencode-linux-{cpu_arch}.tar.gz"
+
+
 def llama_dir() -> Path:
-    variant = "cuda" if has_nvidia_gpu() else "cpu"
+    variant = "cuda" if has_nvidia_gpu() else "macos" if platform.system() == "Darwin" else "cpu"
     return data_dir() / "bin" / f"llama.cpp-{LLAMA_CPP_TAG}-{variant}"
 
 
@@ -95,31 +107,40 @@ def _download(url: str, dest: Path) -> None:
 
 
 def install_release(urls: list[str], dest: Path) -> None:
-    """Download and unpack tarballs into ``dest``, atomically (no half-installed state)."""
+    """Download and unpack archives into ``dest``, atomically (no half-installed state)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=dest.parent) as tmp:
         staging = Path(tmp) / "out"
         for url in urls:
-            archive = Path(tmp) / "archive.tar.gz"
+            archive = Path(tmp) / "archive"
             _download(url, archive)
-            with tarfile.open(archive) as tf:
-                tf.extractall(staging, filter="data")
+            if url.endswith(".zip"):
+                _unzip(archive, staging)
+            else:
+                with tarfile.open(archive) as tf:
+                    tf.extractall(staging, filter="data")
         shutil.rmtree(dest, ignore_errors=True)
         staging.rename(dest)
 
 
+def _unzip(archive: Path, dest: Path) -> None:
+    """Extract inside ``dest`` (zipfile drops ".." and "/"), keeping executable bits."""
+    with zipfile.ZipFile(archive) as zf:
+        for info in zf.infolist():
+            path = Path(zf.extract(info, dest))
+            if mode := (info.external_attr >> 16) & 0o777:
+                path.chmod(mode)
+
+
 def setup(force: bool = False) -> None:
-    cpu_arch = arch()
+    os_name, cpu_arch = platform_id()
     if force or llama_server() is None:
         base = f"{GITHUB}/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_TAG}"
-        assets = llama_assets(cpu_arch, has_nvidia_gpu())
+        assets = llama_assets(os_name, cpu_arch, has_nvidia_gpu())
         install_release([f"{base}/{a}" for a in assets], llama_dir())
     if force or opencode() is None:
-        url = (
-            f"{GITHUB}/sst/opencode/releases/download/v{OPENCODE_VERSION}"
-            f"/opencode-linux-{cpu_arch}.tar.gz"
-        )
-        install_release([url], opencode_dir())
+        base = f"{GITHUB}/anomalyco/opencode/releases/download/v{OPENCODE_VERSION}"
+        install_release([f"{base}/{opencode_asset(os_name, cpu_arch)}"], opencode_dir())
 
 
 def pull(model: Model) -> Path:

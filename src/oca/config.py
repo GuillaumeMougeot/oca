@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import getpass
 import os
+import platform
 import shutil
+import subprocess
 import tomllib
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -169,6 +171,24 @@ def has_nvidia_gpu() -> bool:
     return shutil.which("nvidia-smi") is not None
 
 
+def has_gpu() -> bool:
+    """An NVIDIA GPU, or Apple Silicon, whose llama.cpp build uses Metal."""
+    return has_nvidia_gpu() or (platform.system() == "Darwin" and platform.machine() == "arm64")
+
+
+def process_alive(pid: int, name: str) -> bool:
+    """True when ``pid`` runs a command line containing ``name`` (``/proc``, else ``ps``)."""
+    if pid <= 0:
+        return False
+    try:
+        return name in Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
+    except OSError:
+        if Path("/proc/self").exists():
+            return False  # Linux: the process is gone
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+    return name in out.stdout
+
+
 @dataclass
 class Settings:
     device: str = "auto"
@@ -185,7 +205,7 @@ class Settings:
     @property
     def resolved_device(self) -> str:
         if self.device == "auto":
-            return "gpu" if has_nvidia_gpu() else "cpu"
+            return "gpu" if has_gpu() else "cpu"
         return self.device
 
     @property

@@ -6,7 +6,7 @@
 curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.sh | sh
 ```
 
-- **Platform:** Linux x64 or arm64; WSL works.
+- **Platform:** Linux or macOS, x64 or arm64; WSL works. On Apple Silicon the local model runs on the GPU.
 - **Requirement:** git.
 - **What it installs:** uv if missing, the `oca` command, OpenCode and llama.cpp (about 1.3 GB).
 - **Where heavy files go:** `$OCA_DATA`, else `/data/$USER/oca` if that exists, else `~/.local/share/oca`.

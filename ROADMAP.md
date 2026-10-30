@@ -48,5 +48,5 @@
    - User guide in Markdown: [docs/guide.md](docs/guide.md). A GitHub Pages site once the project grows.
    - `install.sh` runs in a clean Ubuntu container in CI.
    - One command to switch cluster models: done (`oca cluster up <model>` offers to stop or leave the current one).
-   - macOS assets.
+   - macOS (arm64, x64): built; verified by a CI install on macOS.
    - Tag v0.1.

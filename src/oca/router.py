@@ -26,7 +26,7 @@ from pathlib import Path
 import httpx
 
 from . import cluster, server
-from .config import OcaError, Settings, data_dir
+from .config import OcaError, Settings, data_dir, process_alive
 
 CHECK_S = 5  # a cluster health check stays valid this long
 SUPERVISE_S = 60  # how often a down cluster is checked again (job state, tunnel)
@@ -162,10 +162,7 @@ def _key(settings: Settings) -> str:
 
 
 def _alive(pid: int) -> bool:
-    try:
-        return b"oca.router" in Path(f"/proc/{pid}/cmdline").read_bytes()
-    except OSError:
-        return False
+    return process_alive(pid, "oca.router")
 
 
 def _listening(port: int) -> bool:

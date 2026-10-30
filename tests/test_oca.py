@@ -9,6 +9,7 @@ import socket
 import subprocess
 import tarfile
 import threading
+import zipfile
 from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -97,9 +98,28 @@ def test_opencode_sees_one_model_served_by_the_router(no_gpu: None) -> None:
 
 def test_llama_assets() -> None:
     tag = config.LLAMA_CPP_TAG
-    assert install.llama_assets("x64", False) == [f"llama-{tag}-bin-ubuntu-x64.tar.gz"]
-    cuda = install.llama_assets("x64", True)
+    assert install.llama_assets("linux", "x64", False) == [f"llama-{tag}-bin-ubuntu-x64.tar.gz"]
+    cuda = install.llama_assets("linux", "x64", True)
     assert len(cuda) == 2 and all("cuda-12.8-x64" in a for a in cuda)
+    assert install.llama_assets("macos", "arm64", False) == [f"llama-{tag}-bin-macos-arm64.tar.gz"]
+    assert install.opencode_asset("macos", "arm64") == "opencode-darwin-arm64.zip"
+    assert install.opencode_asset("linux", "x64") == "opencode-linux-x64.tar.gz"
+
+
+def test_zip_install_keeps_executables_and_stays_inside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        info = zipfile.ZipInfo("opencode")
+        info.external_attr = 0o755 << 16
+        zf.writestr(info, b"x")
+        zf.writestr("../escape", b"x")
+    monkeypatch.setattr(install, "_download", lambda url, dest: dest.write_bytes(buf.getvalue()))
+    dest = tmp_path / "bin" / "opencode"
+    install.install_release(["opencode-darwin-arm64.zip"], dest)
+    assert os.access(dest / "opencode", os.X_OK)
+    assert not (tmp_path / "bin" / "escape").exists()
 
 
 def _tarball(members: dict[str, bytes]) -> bytes:
