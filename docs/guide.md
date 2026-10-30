@@ -95,6 +95,9 @@ ssh -N -L 4096:127.0.0.1:4096 you@workstation
 
 Then open `http://127.0.0.1:4096` on the phone.
 
+- **Android:** Termux works (`pkg install openssh`). JuiceSSH's port forwarding needs its paid Pro pack.
+- **Through a jump host,** such as a VPS that reaches the workstation: `ssh -J you@vps -N -L 4096:127.0.0.1:4096 you@workstation`.
+
 - To keep the web server running after you log out: `tmux new -d -s oca-web oca web`.
 - To use the terminal UI over SSH instead: `tmux new -As oca oca`.
 

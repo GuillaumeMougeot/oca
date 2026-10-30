@@ -42,8 +42,8 @@
    - Next: try sharing with a real second UCloud account.
    - A cluster model for one B200: done, Qwen3.8-Flash-Next. Single B200s start within minutes, while pairs waited 1.5 to 2 h.
    - Transparent model switching, as in Claude Code: done. OpenCode sees one model, served by oca's router from the best live server ([journal](docs/journal/2026-10-30-model-switching.md)).
-3. **Eval.** In progress: `eval/polyglot.py` scores the agent on Aider's 34 Python exercises. Flash-Next scores 85 to 91% at any effort, so the set is too easy; harder multi-file tasks are next ([journal](docs/journal/2026-10-30-eval.md)). A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU, and Flash-Next against DeepSeek on quality.
-4. **Phone.** Built 2026-10-30: `oca web` serves OpenCode's bundled web UI on localhost with a password, reached from a phone through an SSH tunnel ([guide](docs/guide.md#phone-and-other-machines)). Tested through its API; next, from a real phone.
+3. **Eval.** In progress: `eval/run.py` scores the agent on Aider's 34 Python exercises and on 9 changes from oca's own history. Flash-Next scores 85 to 91% at any effort, so the set is too easy; harder multi-file tasks are next ([journal](docs/journal/2026-10-30-eval.md)). A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU, and Flash-Next against DeepSeek on quality.
+4. **Phone.** Done 2026-10-30: `oca web` serves OpenCode's bundled web UI on localhost with a password, reached from a phone through an SSH tunnel; tested from an Android phone with Termux ([guide](docs/guide.md#phone-and-other-machines)).
 5. **Polish.**
    - User guide in Markdown: [docs/guide.md](docs/guide.md). A GitHub Pages site once the project grows.
    - `install.sh` runs in a clean Ubuntu container in CI.
