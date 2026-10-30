@@ -26,7 +26,7 @@
 | Local model, cpu | Qwen3.6-35B-A3B Q4 with MTP (23 GB, 20 tok/s) | Apache-2.0 | Dense models: too slow on CPU |
 | Local model, gpu | Qwen3.8-27B Q4 (18 GB) | Apache-2.0 | – |
 | Cluster engine | vLLM 0.32 | Apache-2.0 | SGLang (a viable fallback) |
-| Cluster model | Default, 1×B200: Qwen3.8-Flash-Next NVFP4 by Inferact (183 GB, 350 to 390 tok/s, 91% of the polyglot Python exercises) ([journal](docs/journal/2026-10-30-one-b200-model.md)). 2×B200: DeepSeek-V4.1-Flash-1017 original weights (510 GB, 256 to 420 tok/s) ([journal](docs/journal/2026-10-29-cluster-model.md)) | Qwen Community; MIT | ISTA 2-bit GGUF on 1×B200 (unverified agentic quality, new llama.cpp path), GLM-5.3-Flash, Kimi, Mistral Large 4 (610 GB in NVFP4: 4×B200) |
+| Cluster model | Default, 1×B200: Qwen3.8-Flash-Next NVFP4 by Inferact (183 GB, 350 to 390 tok/s; 34/34 polyglot Python exercises, 9/9 oca history tasks) ([journal](docs/journal/2026-10-30-one-b200-model.md)). 2×B200: DeepSeek-V4.1-Flash-1017 original weights (510 GB, 256 to 420 tok/s) ([journal](docs/journal/2026-10-29-cluster-model.md)) | Qwen Community; MIT | ISTA 2-bit GGUF on 1×B200 (unverified agentic quality, new llama.cpp path), GLM-5.3-Flash, Kimi, Mistral Large 4 (610 GB in NVFP4: 4×B200) |
 | Router, automation | none | – | LiteLLM (OpenCode already does multi-provider), n8n (fair-code) |
 
 ## Install UX (decided)
@@ -42,7 +42,7 @@
    - Next: try sharing with a real second UCloud account.
    - A cluster model for one B200: done, Qwen3.8-Flash-Next. Single B200s start within minutes, while pairs waited 1.5 to 2 h.
    - Transparent model switching, as in Claude Code: done. OpenCode sees one model, served by oca's router from the best live server ([journal](docs/journal/2026-10-30-model-switching.md)).
-3. **Eval.** In progress: `eval/run.py` scores the agent on Aider's 34 Python exercises and on 9 changes from oca's own history. Flash-Next scores 85 to 91% at any effort, so the set is too easy; harder multi-file tasks are next ([journal](docs/journal/2026-10-30-eval.md)). A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU, and Flash-Next against DeepSeek on quality.
+3. **Eval.** In progress: `eval/run.py` scores the agent on Aider's 34 Python exercises and on 9 changes from oca's own history. At high effort, Flash-Next solves both: 34/34 and 9/9, once unattended runs refuse instead of asking. Next: the local CPU model and DeepSeek on the same suites, and harder tasks to rank them ([journal](docs/journal/2026-10-30-eval.md)). A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU, and Flash-Next against DeepSeek on quality.
 4. **Phone.** Done 2026-10-30: `oca web` serves OpenCode's bundled web UI in the background, on localhost with a password, reached from a phone by one SSH command; tested from an Android phone with Termux ([guide](docs/guide.md#phone-and-other-machines)).
 5. **Polish.**
    - User guide in Markdown: [docs/guide.md](docs/guide.md), published with the rest of the docs at [guillaumemougeot.github.io/oca](https://guillaumemougeot.github.io/oca/) by GitHub Pages on every push.

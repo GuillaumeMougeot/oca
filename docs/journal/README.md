@@ -12,6 +12,6 @@ One file per question: `YYYY-MM-DD-topic.md`, dated by when it was opened. Each 
 | [2026-10-30-shared-server](2026-10-30-shared-server.md) | OPEN | One server per project: works with a simulated second member; 8 requests at once keep 70 to 90% of solo speed |
 | [2026-10-30-model-switching](2026-10-30-model-switching.md) | RESOLVED | One model for OpenCode, routed by oca to the best live server; a session moved cluster → local → cluster |
 | [2026-10-30-one-b200-model](2026-10-30-one-b200-model.md) | RESOLVED | Qwen3.8-Flash-Next NVFP4 on one B200: ready in 5 min, 350 to 390 tok/s |
-| [2026-10-30-eval](2026-10-30-eval.md) | OPEN | Flash-Next solves 85 to 91% of the polyglot Python exercises at any effort; failures are path slips; harder tasks next |
+| [2026-10-30-eval](2026-10-30-eval.md) | OPEN | Flash-Next at high: 34/34 polyglot, 9/9 history once unattended runs refuse instead of asking; harder tasks next |
 | [2026-10-30-effort](2026-10-30-effort.md) | RESOLVED | Effort as OpenCode variants of oca/auto, translated per model by the router; thinking off made Flash-Next wrong |
 | [2026-10-30-permissions](2026-10-30-permissions.md) | RESOLVED | Like Claude Code's auto mode: allow; ask before deleting, history rewrites, network, installs; deny administration |
