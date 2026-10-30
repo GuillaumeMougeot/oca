@@ -96,6 +96,22 @@ CLUSTER_MODELS: dict[str, ClusterModel] = {
             ),
         ),
         ClusterModel(
+            "qwen3.8-flash-next",
+            "Inferact/Qwen3.8-Flash-Next-NVFP4",
+            182.8,
+            1,
+            262144,
+            "125B MoE, 6B active, NVFP4; Qwen Community License; fits 1 B200",
+            (
+                "--language-model-only",
+                *("--max-num-seqs", "32", "--enable-prefix-caching"),
+                *("--kv-cache-dtype", "fp8", "--attention-config.indexer_kv_dtype", "fp8"),
+                *("--speculative-config", '{"method":"mtp","num_speculative_tokens":3}'),
+                *("--enable-auto-tool-choice", "--tool-call-parser", "qwen3_coder"),
+                *("--reasoning-parser", "qwen3"),
+            ),
+        ),
+        ClusterModel(
             "deepseek-v4.1-flash",
             "deepseek-ai/DeepSeek-V4.1-Flash-1017",
             510.3,
