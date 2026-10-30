@@ -95,6 +95,8 @@ def test_opencode_sees_one_model_served_by_the_router(no_gpu: None) -> None:
     assert model["limit"]["context"] == s.resolved_context > model["limit"]["output"]
     assert cfg["permission"]["webfetch"] == "ask"
     assert model["variants"]["max"] == {"reasoningEffort": "max"}
+    assert cfg["agent"]["title"]["variant"] == "none"  # titles on the cluster, no thinking
+    assert agent.opencode_config(s)["agent"]["title"] == {"disable": True}  # not on CPU
 
 
 def test_unattended_runs_refuse_instead_of_asking() -> None:

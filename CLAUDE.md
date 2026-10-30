@@ -24,6 +24,7 @@ Goal: installing it is as easy as uv or Claude Code, plus one model download. oc
 - Pin every external version (llama.cpp tag, OpenCode version, model file). Bump deliberately and journal why.
 - Open-source software and open-weight models only. Record each license in the ROADMAP table.
 - Never touch the user's global OpenCode config. oca passes its own through `OPENCODE_CONFIG`.
+- Every server oca runs needs a key: localhost is shared with the machine's other users ([journal](docs/journal/2026-10-30-security.md)). Files with keys go through `write_private`.
 - Keep the agent permission rules in `agent.py`. Without them, a local model ran `pip install --break-system-packages` on the host ([journal](docs/journal/2026-10-29-local-mvp.md)).
 - UCloud:
   - Ask before spending GPU-hours or core-hours. Use the smallest product that does the job.

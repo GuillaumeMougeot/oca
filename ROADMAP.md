@@ -50,3 +50,4 @@
    - One command to switch cluster models: done (`oca cluster up <model>` offers to stop or leave the current one).
    - macOS (arm64, x64): built; verified by a CI install on macOS.
    - v0.1.0 tagged 2026-10-30 ([changelog](CHANGELOG.md)).
+6. **Production hardening.** Done 2026-10-30, v0.2.0: keys on every server, private files, releases with `oca update`, log rotation, `oca sessions` ([journal](docs/journal/2026-10-30-security.md)).

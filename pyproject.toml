@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "oca"
-version = "0.1.0"
+version = "0.2.0"
 description = "Open Coding Agent: an open-source, open-weight coding agent stack in one command"
 readme = "README.md"
 requires-python = ">=3.12"

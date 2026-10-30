@@ -112,9 +112,10 @@ def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> d
         "provider": providers,
         "model": ref,
         "small_model": ref,
-        # A reasoning model thinks for 500-1,400 tokens to write a session title, and with
-        # one server slot (MTP) the first turn waits behind it: 29-84 s per session on CPU.
-        "agent": {"title": {"disable": True}},
+        # Session titles, without thinking: free on the cluster (3.6 s per task with, 3.7
+        # without), but on the local CPU server's single slot (MTP) a title request evicts the
+        # session's cached prompt: 77-121 s per task against 39 s. So only when it is up.
+        "agent": {"title": {"model": ref, "variant": "none"} if remote else {"disable": True}},
     }
 
 

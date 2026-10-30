@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import platform
 import shutil
@@ -201,6 +202,14 @@ def remove(paths: list[Path]) -> None:
     for d in (data_dir(), config_dir()):
         with contextlib.suppress(OSError):
             d.rmdir()  # only succeeds when nothing else lives there
+
+
+def editable() -> bool:
+    """True when oca runs from a source checkout (an editable install)."""
+    from importlib.metadata import distribution
+
+    raw = distribution("oca").read_text("direct_url.json") or "{}"
+    return bool(json.loads(raw).get("dir_info", {}).get("editable"))
 
 
 def uv_tool_installed() -> bool:

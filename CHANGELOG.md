@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.0 (2026-10-30)
+
+- **Keys on every server.** Another user of a shared machine could use your endpoints, including your UCloud server through its tunnel. Now the router and llama-server need your key, and each UCloud server has its own, shared with project members through its listing.
+- **Private files:** oca's configs and state, which hold keys, are readable only by you.
+- **`oca update`** installs the newest release, and `install.sh` now installs the newest release rather than `main`.
+- **`oca sessions`** lists or deletes this folder's sessions. Sessions get titles while a UCloud server answers.
+- **`oca web`** runs in the background; one SSH command from a phone starts it and opens the tunnel.
+- **Permissions** follow Claude Code's auto mode. Unattended runs refuse instead of asking, so a disallowed step no longer ends the run.
+- **Effort** variants (`ctrl+t`): `none` to `max`, translated for each model.
+- **Housekeeping:** logs rotate at 10 MB, `oca uninstall` removes eval runs, and `oca cluster up` starts afresh after a job ended.
+- **Evaluation:** `eval/run.py`. Qwen3.8-Flash-Next solves 34/34 polyglot exercises and 9/9 tasks from oca's history.
+- **Docs site:** [guillaumemougeot.github.io/oca](https://guillaumemougeot.github.io/oca/).
+
 ## v0.1.0 (2026-10-30)
 
 First release.

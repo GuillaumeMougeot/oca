@@ -11,7 +11,7 @@ curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.s
 - **What it installs:** uv if missing, the `oca` command, OpenCode and llama.cpp (about 1.3 GB).
 - **Where heavy files go:** `$OCA_DATA`, else `/data/$USER/oca` if that exists, else `~/.local/share/oca`.
 
-Run the same line again to update.
+`oca update` installs the newest release. For the latest unreleased code: `OCA_SOURCE=git+https://github.com/GuillaumeMougeot/oca sh install.sh`.
 
 ## Daily use
 
@@ -21,7 +21,7 @@ Run the same line again to update.
 
 OpenCode sees one model, `oca/auto`: the UCloud model while a server answers, else the local model. A session carries on when the model behind it changes, mid-task or when you resume it later.
 
-**Resume:** `oca -c` reopens the last session in this directory, and `oca -s <id>` reopens a given one. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists sessions.
+**Sessions:** `oca sessions` lists this folder's sessions; `oca sessions --delete <id>` deletes one. `oca -c` reopens the last session, and `oca -s <id>` a given one. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles while a UCloud server answers; the local CPU model skips them, since a title costs 40 to 80 s there.
 
 **Effort:** `ctrl+t` in OpenCode cycles `oca/auto`'s variants: `none`, `low`, `medium`, `high`, `max`. Without a variant, each model uses its default. For one task: `oca run -- run --variant low "…"`.
 - `none` turns thinking off: fastest, but weakest.
@@ -36,6 +36,11 @@ OpenCode sees one model, `oca/auto`: the UCloud model while a server answers, el
 - Asks first: deleting (`rm`), rewriting git history or pushing, reaching other machines (`curl`, `ssh`, web fetch and search), installing outside the project, and touching paths outside the project. Answer *always* to stop being asked for the rest of the session.
 - Never allowed: administration, such as `sudo`, `su`, `systemctl` or `--break-system-packages`.
 - Unattended runs (`oca run -- run …`) cannot ask, so what would ask is refused instead, and the agent carries on another way.
+
+**Keys:** oca's servers listen on localhost, which every user of the machine can reach, so each one needs a key.
+- The router and the local llama-server take your key, in `~/.config/oca/api-key`; OpenCode sends it for you.
+- Each UCloud server has its own key, kept in its listing on the project drive, where members find it.
+- Files that hold keys are readable only by you.
 
 ## Local model
 
@@ -117,6 +122,8 @@ Then open `http://127.0.0.1:4096` on the phone. `Ctrl+C` closes the tunnel, and 
 | `cluster_port` | 8001 | local end of the SSH tunnel |
 
 ## Troubleshooting
+
+- **"this endpoint needs oca's key":** an OpenCode session started before the update; restart it with `oca`.
 
 - **"UCloud rejected this machine's SSH key":** register the key (see above). The server then has to be restarted.
 - **Job "in queue":** the B200s are busy. Waiting costs nothing, and `oca cluster down` cancels.

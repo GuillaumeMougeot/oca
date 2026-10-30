@@ -112,6 +112,8 @@ def sessions(
 @app.command()
 def update() -> None:
     """Install the newest oca release, then the binaries it pins."""
+    if install.editable():
+        raise OcaError("this oca runs from a source checkout; update it with `git pull`")
     if not install.uv_tool_installed():
         raise OcaError(
             "this oca was not installed with `uv tool`; update it the way you installed it"

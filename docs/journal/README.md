@@ -15,3 +15,4 @@ One file per question: `YYYY-MM-DD-topic.md`, dated by when it was opened. Each 
 | [2026-10-30-eval](2026-10-30-eval.md) | RESOLVED | Flash-Next at high: 34/34 polyglot, 9/9 history once unattended runs refuse instead of asking; harder tasks next |
 | [2026-10-30-effort](2026-10-30-effort.md) | RESOLVED | Effort as OpenCode variants of oca/auto, translated per model by the router; thinking off made Flash-Next wrong |
 | [2026-10-30-permissions](2026-10-30-permissions.md) | RESOLVED | Like Claude Code's auto mode: allow; ask before deleting, history rewrites, network, installs; deny administration |
+| [2026-10-30-security](2026-10-30-security.md) | RESOLVED | Localhost is shared with other users: keys on the router, llama-server and each UCloud server; private files |
