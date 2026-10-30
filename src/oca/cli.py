@@ -35,6 +35,8 @@ cluster_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(cluster_app, name="cluster")
+web_app = typer.Typer(help="OpenCode in a browser for this folder, e.g. on a phone.")
+app.add_typer(web_app, name="web")
 console = Console()
 Yes = Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")]
 ClusterModelArg = Annotated[
@@ -136,25 +138,30 @@ def update() -> None:
     os.execvp("oca", ["oca", "setup"])  # the new oca installs what its pins need
 
 
-@app.command("web")
+@web_app.callback(invoke_without_command=True)
 def web_ui(
+    ctx: typer.Context,
     port: Annotated[int, typer.Option(help="Port on this machine.")] = 4096,
-    stop: Annotated[bool, typer.Option("--stop", help="Stop the web server.")] = False,
     yes: Yes = False,
 ) -> None:
     """OpenCode in a browser for this folder, e.g. on a phone; runs in the background."""
-    if stop:
-        console.print("Stopped." if web.stop() else "Not running.")
+    if ctx.invoked_subcommand is not None:
         return
     settings = Settings.load()
     _ready(settings, yes)
     state = web.start(port, Path.cwd())
     console.print(
         f"OpenCode for {state['project']} at http://127.0.0.1:{port}, user opencode, "
-        f"password {agent.web_password()}. It keeps running; `oca web --stop` ends it.\n"
+        f"password {agent.web_password()}. It keeps running; `oca web stop` ends it.\n"
         f"From a phone: `ssh -N -L {port}:127.0.0.1:{port} <you>@<this machine>`, "
         "then open that address."
     )
+
+
+@web_app.command("stop")
+def web_stop() -> None:
+    """Stop the web server."""
+    console.print("Stopped." if web.stop() else "Not running.")
 
 
 @app.command()
@@ -340,8 +347,15 @@ def cluster_pull(model: ClusterModelArg = None, yes: Yes = False) -> None:
 
 
 @cluster_app.command("up")
-def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
-    """Serve a model on UCloud, or join a project member's server, and make it the default."""
+def cluster_up(
+    model: ClusterModelArg = None,
+    wait: Annotated[bool, typer.Option("--wait", "-w", help="Wait until it answers.")] = False,
+    yes: Yes = False,
+) -> None:
+    """Start a UCloud server, or join a project member's, and return.
+
+    `oca` works on the local model meanwhile and switches once the server answers.
+    """
     settings = Settings.load()
     m = _cluster_model(model, settings)
     job = cluster.read("serve")
@@ -375,13 +389,24 @@ def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
         )
         job = cluster.submit_serve(settings, m)
         console.print(f"Job {job.job_id} submitted.")
-    began = time.monotonic()
-    with console.status("waiting") as st:
-        cluster.wait_ready(settings, job, st.update)
-    router.ensure(settings)
-    agent.write_config(settings, m)
-    minutes = (time.monotonic() - began) / 60
-    console.print(f"Ready after {minutes:.0f} min. `oca` now uses {m.id}.")
+    router.ensure(settings)  # its background check opens the tunnel once the job runs
+    if wait:
+        began = time.monotonic()
+        with console.status("waiting") as st:
+            cluster.wait_ready(settings, job, st.update)
+        minutes = (time.monotonic() - began) / 60
+        doing = None
+        console.print(f"Ready after {minutes:.0f} min.")
+    else:
+        doing = cluster.check(settings, job)  # one attempt: it may answer already
+    agent.write_config(settings, m if doing is None else None)
+    if doing is None:
+        console.print(f"`oca` now uses {m.id}.")
+    else:
+        console.print(
+            f"{m.id}: {doing}. `oca` works on the local model and switches by itself once "
+            "the server answers; `oca cluster status` follows it."
+        )
 
 
 @cluster_app.command("down")

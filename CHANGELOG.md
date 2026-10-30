@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **`oca cluster up` returns at once.** `oca` works locally and switches once the server answers; `--wait` blocks as before.
+- **`oca web stop`** replaces `oca web --stop`.
+- **`oca sessions --clear`** deletes the sessions started in this folder or below.
+- **Evaluation:** runs keep their sessions in their own store, out of the user's list.
+- **CI:** a clean install runs `oca update`.
+
 ## v0.2.0 (2026-10-30)
 
 - **Keys on every server.** Another user of a shared machine could use your endpoints, including your UCloud server through its tunnel. Now the router and llama-server need your key, and each UCloud server has its own, shared with project members through its listing.

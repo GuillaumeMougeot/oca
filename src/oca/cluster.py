@@ -505,6 +505,11 @@ def ensure_tunnel(settings: Settings, job: Job, timeout: float = 300) -> None:
 
     if _alive(job.tunnel_pid) and _port_open(settings.cluster_port):
         return
+    saved = read(job.kind)  # the router's background check may have opened it meanwhile
+    same = saved is not None and saved.job_id == job.job_id
+    if same and saved and _alive(saved.tunnel_pid) and _port_open(settings.cluster_port):
+        job.tunnel_pid = saved.tunnel_pid
+        return
     stop_tunnel(job)
     if not job.endpoint:
         with _client() as client:

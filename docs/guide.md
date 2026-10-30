@@ -65,7 +65,7 @@ Once per project, download the weights: `oca cluster pull [model]`. This runs a 
 
 | Command | Does |
 |---|---|
-| `oca cluster up [model]` | join the project's running server of that model, or start one after showing its GPU-hour cap |
+| `oca cluster up [model]` | join the project's running server of that model, or start one after showing its GPU-hour cap; it returns at once, and `oca` switches to the server once it answers (`--wait` blocks until then) |
 | `oca cluster down` | stop your server, or leave one you joined |
 | `oca cluster status`, `oca cluster logs -f` | state and time left; the job's log |
 | `oca cluster extend 2` | add 2 h; starter only |
@@ -91,7 +91,7 @@ Everyone in the project with the same `cluster_drive` shares servers: `oca clust
 
 ## Phone and other machines
 
-`oca web` serves OpenCode's web interface for the current folder, in the background. It listens on localhost only and needs a password: the user is `opencode`, and `oca web` prints the password. It keeps running after you log out; `oca web --stop` ends it.
+`oca web` serves OpenCode's web interface for the current folder, in the background. It listens on localhost only and needs a password: the user is `opencode`, and `oca web` prints the password. It keeps running after you log out; `oca web stop` ends it.
 
 From a phone, one SSH command starts it if needed and opens the tunnel, with no tmux:
 
