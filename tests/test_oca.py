@@ -146,6 +146,7 @@ def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:
         assert "--host 127.0.0.1" in script  # reachable only through the SSH tunnel
         assert f"vllm=={config.VLLM_VERSION}" in script
         assert f"rm -f /work/oca/servers/{model.id}.json" in script  # unlisted on exit
+        assert "trap unlist EXIT" in script and "export CUDA_HOME=" in script
 
 
 def test_cluster_provider_becomes_default_when_reachable() -> None:

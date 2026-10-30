@@ -31,6 +31,8 @@ oca cluster status | logs -f | extend 2 | down
 
 Jobs stop on their own after `cluster_idle` minutes without requests (default 60).
 
+Members of one UCloud project share servers. With the same `cluster_drive`, `oca cluster up` joins a running server instead of starting a second one, and `oca cluster down` then only leaves it.
+
 Data (models, binaries, logs) goes in `$OCA_DATA`. The default is `/data/$USER/oca` if that disk exists, otherwise `~/.local/share/oca`.
 
 Status: [ROADMAP.md](ROADMAP.md). Why things are the way they are: [docs/journal](docs/journal/README.md).

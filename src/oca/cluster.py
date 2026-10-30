@@ -144,21 +144,31 @@ def serve_script(model: ClusterModel, settings: Settings, tag: str) -> str:
     return _wrap(
         tag,
         [
+            # Unlist this server on any exit, unless a newer one replaced the listing.
+            f"unlist() {{ grep -qs '\"{tag}\"' {listing} && rm -f {listing}; }}",
+            "trap unlist EXIT",
             "nvidia-smi -L || exit 1",
             *_download(model),
             f'if [ ! -x "{venv}/bin/vllm" ]; then',
             f'  rm -rf "{venv}" && uv venv -p 3.12 "{venv}" || exit 1',
             f'  uv pip install -p "{venv}" "vllm=={VLLM_VERSION}" --torch-backend=auto || exit 1',
             "fi",
-            # The app ships no CUDA toolkit, so FlashInfer cannot JIT-compile its kernels:
-            # install its prebuilt ones, matching the installed flashinfer and CUDA versions.
-            f'read -r fi cu < <("{venv}/bin/python" -c \'import importlib.metadata as m; '
-            't = m.version("torch"); '
-            'print(m.version("flashinfer-python"), "cu130" if "+cu13" in t else "cu129")\')',
+            # The app ships no CUDA toolkit, but pip put one in the venv (nvidia/cu13), and
+            # DeepGEMM compiles kernels with it at startup. FlashInfer gets prebuilt kernels,
+            # matching the installed flashinfer and CUDA versions, so it compiles nothing.
+            f'read -r fi cu rt < <("{venv}/bin/python" -c \'import importlib.metadata as m; '
+            't = m.version("torch"); rt = m.version("nvidia-cuda-runtime").split(".")[:2]; '
+            'print(m.version("flashinfer-python"), "cu130" if "+cu13" in t else "cu129", '
+            '".".join(rt))\')',
             f'uv pip install -p "{venv}" "flashinfer-cubin==$fi" '
             "--extra-index-url https://flashinfer.ai/whl || exit 1",
             f'uv pip install -p "{venv}" "flashinfer-jit-cache==$fi+$cu" '
             '--extra-index-url "https://flashinfer.ai/whl/$cu" || exit 1',
+            # nvcc must match the CUDA headers torch pins, or CCCL refuses to compile.
+            f'uv pip install -p "{venv}" "nvidia-cuda-nvcc==$rt.*" "nvidia-cuda-crt==$rt.*" '
+            '"nvidia-nvvm==$rt.*" || exit 1',
+            f'export CUDA_HOME=$(echo "{venv}"/lib/python3*/site-packages/nvidia/cu13)',
+            'export PATH="$CUDA_HOME/bin:$PATH"',
             # Compile caches on the drive make every start after the first one faster.
             "export XDG_CACHE_HOME=/work/oca/cache VLLM_CACHE_ROOT=/work/oca/cache/vllm",
             "export HF_HUB_OFFLINE=1",
@@ -197,8 +207,6 @@ def serve_script(model: ClusterModel, settings: Settings, tag: str) -> str:
             "  fi",
             "done",
             'wait "$pid"; code=$?',
-            # Unlist this server, unless a newer one replaced the listing.
-            f"grep -qs '\"{tag}\"' {listing} && rm -f {listing}",
             '[ "$stopped" = 1 ] && exit 0',
             'exit "$code"',
         ],
@@ -476,9 +484,9 @@ def ensure_tunnel(settings: Settings, job: Job, timeout: float = 300) -> None:
                     raise OcaError(f"job {job.job_id} advertised no SSH endpoint")
                 time.sleep(5)
         job.endpoint = f"{found.user}@{found.host}:{found.port}"
-        _write(job, job.kind)
         if job.owner and job.kind == "serve":
-            publish(settings, job)
+            publish(settings, job)  # before saving the endpoint, so a failed listing is retried
+        _write(job, job.kind)
     login, port = job.endpoint.rsplit(":", 1)
     user, host = login.split("@", 1)
     log = data_dir() / "logs" / "tunnel.log"
@@ -540,6 +548,8 @@ def check(settings: Settings, job: Job) -> str | None:
         state = JobState.RUNNING  # members may not see each other's jobs; the tunnel will tell
     if state.is_terminal:
         _write(None, job.kind)
+        if job.owner:
+            _unlist(settings, job)
         tail = log_tail(settings, job)
         raise OcaError(f"job {job.job_id} ended ({state.value}). Log tail:\n{tail}")
     if state != JobState.RUNNING:

@@ -35,5 +35,9 @@ DeepSWE v1.1 is the only benchmark that appears on most of the cards. The harnes
 - `hf` used all of its 2 vCPUs. More vCPUs would finish sooner for about the same core-hours.
 - The last two files are 101.5 GB each, so the end runs on two streams.
 
-## Next
-Validate on 2×B200 against the Qwen3.8-27B smoke-test baseline, with OpenCode through the tunnel.
+## Validation on 2×B200
+**Hypothesis** (written before the job ran):
+- The first start is ready within 30 min: loading 510 GB from the drive, compiling, capturing CUDA graphs.
+- 100 to 250 tok/s single-stream with DSpark drafting, against 111 tok/s for Qwen3.8-27B on 1×B200 without drafting.
+- The bug-fix task through the tunnel takes 15 to 40 s, against 38 s on the local CPU.
+- 4 concurrent requests give at least 2.5× the throughput of one.
