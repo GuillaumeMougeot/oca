@@ -13,6 +13,6 @@ oca cluster up # optional: a UCloud B200 server; `oca` switches to it once it an
 oca web        # OpenCode in a browser, e.g. on a phone
 ```
 
-How to use it: [docs/guide.md](docs/guide.md). Status: [ROADMAP.md](ROADMAP.md). Why things are the way they are: [docs/journal](docs/journal/README.md).
+How to use it: [docs/guide.md](docs/guide.md), also at [guillaumemougeot.github.io/oca](https://guillaumemougeot.github.io/oca/). Status: [ROADMAP.md](ROADMAP.md). Why things are the way they are: [docs/journal](docs/journal/README.md).
 
 Development: `uv sync`, then `uv run pytest`, `uv run ruff check .`, `uv run mypy`.
