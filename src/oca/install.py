@@ -28,6 +28,18 @@ from .config import (
 )
 
 GITHUB = "https://github.com"
+REPO = f"{GITHUB}/GuillaumeMougeot/oca"
+
+
+def latest_release() -> str:
+    """The newest release tag of oca, such as "v0.2.0"."""
+    out = subprocess.run(
+        ["git", "ls-remote", "--tags", "--refs", "--sort=-v:refname", REPO, "v*"],
+        capture_output=True, text=True, check=True, timeout=60,
+    ).stdout  # fmt: skip
+    if not out.strip():
+        raise OcaError(f"no release found at {REPO}")
+    return out.split()[1].removeprefix("refs/tags/")
 
 
 def platform_id() -> tuple[str, str]:
@@ -152,8 +164,8 @@ def pull(model: Model) -> Path:
 
 
 # Only what oca creates is deleted, so an OCA_DATA pointing at a shared disk is never wiped.
-DATA_PARTS = ("bin", "models", "logs", "run")
-CONFIG_PARTS = ("config.toml", "opencode.json", "opencode-run.json", "web-password")
+DATA_PARTS = ("bin", "models", "logs", "run", "eval")
+CONFIG_PARTS = ("config.toml", "opencode.json", "opencode-run.json", "api-key", "web-password")
 
 
 def opencode_state_dirs() -> list[Path]:

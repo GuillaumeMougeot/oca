@@ -7,5 +7,7 @@ if ! command -v uv >/dev/null 2>&1; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 export PATH="$HOME/.local/bin:$PATH"
-uv tool install --force --python 3.12 "${OCA_SOURCE:-git+https://github.com/GuillaumeMougeot/oca}"
+# The newest release; OCA_SOURCE overrides it (e.g. git+https://github.com/GuillaumeMougeot/oca for main).
+tag=$(git ls-remote --tags --refs --sort=-v:refname https://github.com/GuillaumeMougeot/oca 'v*' | head -n 1 | sed 's|.*refs/tags/||')
+uv tool install --force --python 3.12 "${OCA_SOURCE:-git+https://github.com/GuillaumeMougeot/oca@${tag:-main}}"
 oca setup

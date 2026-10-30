@@ -9,6 +9,7 @@ is up. A background check re-opens the tunnel once a queued or restarted job run
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import signal
@@ -18,48 +19,67 @@ import sys
 import threading
 import time
 from contextlib import suppress
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import version
 from pathlib import Path
 
 import httpx
 
-from . import cluster, server
-from .config import CLUSTER_MODELS, EFFORTS, OcaError, Settings, data_dir, process_alive
+from . import agent, cluster, server
+from .config import (
+    CLUSTER_MODELS,
+    EFFORTS,
+    OcaError,
+    Settings,
+    data_dir,
+    open_log,
+    process_alive,
+)
 
 CHECK_S = 5  # a cluster health check stays valid this long
 SUPERVISE_S = 60  # how often a down cluster is checked again (job state, tunnel)
 HOP = {"connection", "keep-alive", "transfer-encoding"}  # not forwarded to OpenCode
 
 
+@dataclass(frozen=True)
+class Backend:
+    url: str
+    model: str
+    remote: bool  # the UCloud server, not the local one
+    key: str  # what the server wants as a bearer token; "" for none
+    efforts: tuple[str | int, ...] = ()
+
+
 class Router:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.key = agent.api_key()  # what OpenCode must send
         self._start = threading.Lock()  # one local server start at a time
         self._seen: float = -CHECK_S
-        self._remote: str | None = None
+        self._remote: cluster.Job | None = None
 
-    def remote(self) -> str | None:
-        """The cluster's model id while its server answers."""
+    def remote(self) -> cluster.Job | None:
+        """The cluster job while its server answers."""
         if time.monotonic() - self._seen > CHECK_S:
             job = cluster.read("serve")
-            self._remote = job.model if job and cluster.healthy(self.settings) else None
+            self._remote = job if job and cluster.healthy(self.settings) else None
             self._seen = time.monotonic()
         return self._remote
 
     def forget_remote(self) -> None:
         self._remote, self._seen = None, time.monotonic()
 
-    def backend(self) -> tuple[str, str, bool, tuple[str | int, ...]]:
-        """Base URL, model id and effort values for the next request; True if the cluster."""
-        if model := self.remote():
-            efforts = CLUSTER_MODELS[model].efforts if model in CLUSTER_MODELS else ()
-            return f"http://127.0.0.1:{self.settings.cluster_port}", model, True, efforts
+    def backend(self) -> Backend:
+        """Where the next request goes: the cluster while it answers, else the local server."""
+        if job := self.remote():
+            efforts = CLUSTER_MODELS[job.model].efforts if job.model in CLUSTER_MODELS else ()
+            url = f"http://127.0.0.1:{self.settings.cluster_port}"
+            return Backend(url, job.model, True, job.key, efforts)
         with self._start:
             server.start(self.settings)
-        local = f"http://127.0.0.1:{server.port(self.settings)}"
-        return local, self.settings.resolved_model.id, False, ()
+        url = f"http://127.0.0.1:{server.port(self.settings)}"
+        return Backend(url, self.settings.resolved_model.id, False, self.key)
 
 
 def _retarget(body: bytes, model: str, efforts: tuple[str | int, ...]) -> bytes:
@@ -89,24 +109,28 @@ def handler(router: Router) -> type[BaseHTTPRequestHandler]:
             self._forward(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
 
         def _forward(self, body: bytes) -> None:
+            given = self.headers.get("Authorization", "").encode()
+            if not hmac.compare_digest(given, f"Bearer {router.key}".encode()):
+                return self._error(401, "this endpoint needs oca's key, as in its OpenCode config")
             for retry in (False, True):
                 try:
-                    base, model, remote, efforts = router.backend()
+                    to = router.backend()
                 except OcaError as e:
-                    return self._error(f"no model is up: {e}")
+                    return self._error(503, f"no model is up: {e}")
                 headers = {
                     "Content-Type": self.headers.get("Content-Type", "application/json"),
                     "Accept": self.headers.get("Accept", "*/*"),
                     "Accept-Encoding": "identity",
+                    **({"Authorization": f"Bearer {to.key}"} if to.key else {}),
                 }
-                url, timeout = base + self.path, httpx.Timeout(None, connect=3)
+                url, timeout = to.url + self.path, httpx.Timeout(None, connect=3)
                 try:
                     stream = httpx.stream(
-                        self.command, url, content=_retarget(body, model, efforts), headers=headers,
-                        timeout=timeout,
+                        self.command, url, content=_retarget(body, to.model, to.efforts),
+                        headers=headers, timeout=timeout,
                     )  # fmt: skip
                     with stream as r:
-                        sys.stderr.write(f"{time.strftime('%X')} {self.path} -> {model}\n")
+                        sys.stderr.write(f"{time.strftime('%X')} {self.path} -> {to.model}\n")
                         self.send_response(r.status_code)
                         for k, v in r.headers.items():
                             if k.lower() not in HOP:
@@ -118,13 +142,13 @@ def handler(router: Router) -> type[BaseHTTPRequestHandler]:
                                 self.wfile.flush()
                     return
                 except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-                    if not remote or retry:
-                        return self._error(f"{model} unreachable: {e}")
+                    if not to.remote or retry:
+                        return self._error(503, f"{to.model} unreachable: {e}")
                     router.forget_remote()  # the cluster went away mid-session: go local
 
-        def _error(self, message: str) -> None:
+        def _error(self, status: int, message: str) -> None:
             data = json.dumps({"error": {"message": f"oca: {message}"}}).encode()
-            self.send_response(503)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -199,8 +223,7 @@ def ensure(settings: Settings) -> None:
     stop()
     if (old := server.read_state()) and old.port != server.port(settings):
         server.stop()  # an older oca ran llama-server on the router's port
-    log_path().parent.mkdir(parents=True, exist_ok=True)
-    with log_path().open("ab") as log:
+    with open_log(log_path()) as log:
         proc = subprocess.Popen(
             [sys.executable, "-m", "oca.router"],
             stdin=subprocess.DEVNULL,

@@ -20,6 +20,7 @@ import getpass
 import json
 import os
 import re
+import secrets
 import shlex
 import signal
 import socket
@@ -33,7 +34,16 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from .config import VLLM_VERSION, ClusterModel, OcaError, Settings, data_dir, process_alive
+from .config import (
+    VLLM_VERSION,
+    ClusterModel,
+    OcaError,
+    Settings,
+    data_dir,
+    open_log,
+    process_alive,
+    write_private,
+)
 
 if TYPE_CHECKING:  # ucloud_api is imported lazily: it is slow and only needed here
     from ucloud_api import UCloudClient
@@ -55,6 +65,7 @@ class Job:
     tunnel_pid: int = 0
     owner: bool = True  # False: joined another member's server
     endpoint: str = ""  # SSH "user@host:port", once the job advertised it
+    key: str = ""  # the server's API key; members read it from the listing
 
 
 # -- local state ---------------------------------------------------------------------------
@@ -82,8 +93,7 @@ def _write(job: Job | None, kind: str) -> None:
         jobs.pop(kind, None)
     else:
         jobs[kind] = job
-    state_path().parent.mkdir(parents=True, exist_ok=True)
-    state_path().write_text(json.dumps({k: asdict(v) for k, v in jobs.items()}))
+    write_private(state_path(), json.dumps({k: asdict(v) for k, v in jobs.items()}))
 
 
 # -- remote scripts (pure, unit-tested) ----------------------------------------------------
@@ -126,17 +136,20 @@ def pull_script(model: ClusterModel, tag: str) -> str:
     return _wrap(tag, [*_download(model), f'echo "oca: {model.id} downloaded"'])
 
 
-def serve_command(model: ClusterModel) -> list[str]:
+def serve_command(model: ClusterModel, key: str = "") -> list[str]:
     return [
         *("/work/oca/venvs/vllm-" + VLLM_VERSION + "/bin/vllm", "serve", _model_dir(model)),
         *("--served-model-name", model.id),
         *("--host", "127.0.0.1", "--port", str(REMOTE_PORT)),
         *("--max-model-len", str(model.context)),
+        # The tunnel's local port is open to every user of that machine; /health and
+        # /metrics stay open, for the waits and the idle stop.
+        *(("--api-key", key) if key else ()),
         *model.args,
     ]
 
 
-def serve_script(model: ClusterModel, settings: Settings, tag: str) -> str:
+def serve_script(model: ClusterModel, settings: Settings, tag: str, key: str = "") -> str:
     venv = f"/work/oca/venvs/vllm-{VLLM_VERSION}"
     listing = f"/work/oca/servers/{model.id}.json"
     health = f"http://127.0.0.1:{REMOTE_PORT}"
@@ -173,7 +186,7 @@ def serve_script(model: ClusterModel, settings: Settings, tag: str) -> str:
             "export XDG_CACHE_HOME=/work/oca/cache VLLM_CACHE_ROOT=/work/oca/cache/vllm",
             "export HF_HUB_OFFLINE=1",
             *([f"export {env}"] if env else []),
-            shlex.join(serve_command(model)) + " &",
+            shlex.join(serve_command(model, key)) + " &",
             "pid=$!",
             f"until curl -sf {health}/health >/dev/null; do",
             '  kill -0 "$pid" 2>/dev/null || { wait "$pid"; exit "$?"; }',
@@ -186,7 +199,7 @@ def serve_script(model: ClusterModel, settings: Settings, tag: str) -> str:
             'ask = [{"role": "user", "content": "Explain a hash map in 150 words."}]',
             f'body = json.dumps({{"model": "{model.id}", "max_tokens": 512, "messages": ask}})',
             f'url = "{health}/v1/chat/completions"',
-            'head = {"Content-Type": "application/json"}',
+            f'head = {{"Content-Type": "application/json", "Authorization": "Bearer {key}"}}',
             "req = urllib.request.Request(url, body.encode(), head)",
             "t = time.time()",
             'n = json.load(urllib.request.urlopen(req, timeout=900))["usage"]["completion_tokens"]',
@@ -276,8 +289,7 @@ def _submit(settings: Settings, job: Job, script: str, gpus: int) -> Job:
                 with suppress(APIError):
                     files.mkdir(f"{drive}/{folder}", conflict_policy="REJECT")
         local = data_dir() / "run" / f"{job.tag}.sh"
-        local.parent.mkdir(parents=True, exist_ok=True)
-        local.write_text(script)
+        write_private(local, script)
         remote = f"{drive}/oca/jobs/{job.tag}.sh"
         Transfer(client).upload(local, remote)
         hours = settings.cluster_hours if gpus else PULL_HOURS
@@ -289,7 +301,8 @@ def _submit(settings: Settings, job: Job, script: str, gpus: int) -> Job:
 
 
 def _new(kind: str, model: ClusterModel) -> Job:
-    return Job(kind, "", model.id, f"{kind}-{model.id}-{time.strftime('%Y%m%d-%H%M%S')}")
+    tag = f"{kind}-{model.id}-{time.strftime('%Y%m%d-%H%M%S')}"
+    return Job(kind, "", model.id, tag, key=secrets.token_urlsafe(24) if kind == "serve" else "")
 
 
 def _key_blob(public_key: str) -> str:
@@ -327,7 +340,7 @@ def pull(settings: Settings, model: ClusterModel) -> Job:
 
 def submit_serve(settings: Settings, model: ClusterModel) -> Job:
     job = _new("serve", model)
-    return _submit(settings, job, serve_script(model, settings, job.tag), model.gpus)
+    return _submit(settings, job, serve_script(model, settings, job.tag, job.key), model.gpus)
 
 
 def _listing(settings: Settings, model_id: str) -> str:
@@ -340,12 +353,12 @@ def publish(settings: Settings, job: Job) -> None:
     from ucloud_api.exceptions import APIError
 
     entry = {
-        **{k: getattr(job, k) for k in ("job_id", "model", "tag", "endpoint")},
+        # The key is readable by whoever can read the drive: the project's members.
+        **{k: getattr(job, k) for k in ("job_id", "model", "tag", "endpoint", "key")},
         "started_by": f"{getpass.getuser()}@{socket.gethostname()}",
     }
     local = data_dir() / "run" / f"listing-{job.model}.json"
-    local.parent.mkdir(parents=True, exist_ok=True)
-    local.write_text(json.dumps(entry))
+    write_private(local, json.dumps(entry))
     with _client() as client:
         with suppress(APIError):
             Files(client).mkdir(f"{_drive(settings)}/oca/servers", conflict_policy="REJECT")
@@ -360,7 +373,10 @@ def join(settings: Settings, model: ClusterModel) -> tuple[Job, str] | None:
     with _client() as client:
         try:
             entry = json.loads(Transfer(client).read_bytes(_listing(settings, model.id)))
-            job = Job("serve", entry["job_id"], model.id, entry["tag"], 0, False, entry["endpoint"])
+            job = Job(
+                "serve", entry["job_id"], model.id, entry["tag"], 0, False, entry["endpoint"],
+                entry.get("key", ""),
+            )  # fmt: skip
         except (UCloudError, ValueError, KeyError):
             return None
         with suppress(APIError):  # members may not see each other's jobs; the tunnel will tell
@@ -378,6 +394,24 @@ def _unlist(settings: Settings, job: Job) -> None:
     with _client() as client, suppress(UCloudError, ValueError):
         if json.loads(Transfer(client).read_bytes(path)).get("tag") == job.tag:
             Files(client).trash(path)
+
+
+def ended(settings: Settings, job: Job) -> bool:
+    """True, with the job forgotten, if it finished; False if it runs or we cannot tell."""
+    from ucloud_api import Jobs
+    from ucloud_api.exceptions import APIError
+
+    try:
+        with _client() as client:
+            state = Jobs(client).state(job.job_id)
+    except APIError:
+        return False  # members may not see each other's jobs
+    if not state.is_terminal:
+        return False
+    _write(None, job.kind)
+    if job.owner:
+        _unlist(settings, job)
+    return True
 
 
 def job_status(job: Job) -> dict[str, Any]:
@@ -487,10 +521,9 @@ def ensure_tunnel(settings: Settings, job: Job, timeout: float = 300) -> None:
     login, port = job.endpoint.rsplit(":", 1)
     user, host = login.split("@", 1)
     log = data_dir() / "logs" / "tunnel.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
     known = data_dir() / "run" / f"known_hosts-{job.job_id}"
     cmd = tunnel_command(user, host, int(port), settings.cluster_port, known)
-    with log.open("ab") as fh:
+    with open_log(log) as fh:
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import agent, install
-from .config import OcaError, data_dir, process_alive
+from .config import OcaError, data_dir, open_log, process_alive
 
 
 def state_path() -> Path:
@@ -57,8 +57,7 @@ def start(port: int, project: Path) -> dict[str, Any]:
         PWD=str(project),  # OpenCode takes its project from $PWD
         BROWSER="true",  # `opencode web` opens a browser; there is none to open here
     )
-    log_path().parent.mkdir(parents=True, exist_ok=True)
-    with log_path().open("ab") as log:
+    with open_log(log_path()) as log:
         proc = subprocess.Popen(
             [str(exe), "web", "--hostname", "127.0.0.1", "--port", str(port)],
             cwd=project,

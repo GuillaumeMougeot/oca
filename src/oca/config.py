@@ -5,11 +5,13 @@ from __future__ import annotations
 import getpass
 import os
 import platform
+import secrets
 import shutil
 import subprocess
 import tomllib
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+from typing import IO
 
 import tomli_w
 from platformdirs import user_config_path, user_data_path
@@ -175,6 +177,38 @@ def data_dir() -> Path:
 
 def model_path(model: Model) -> Path:
     return data_dir() / "models" / model.repo / model.file
+
+
+def write_private(path: Path, text: str) -> None:
+    """Write ``text`` readable by this user only: oca's configs and state hold keys."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    path.chmod(0o600)  # in case it existed with wider permissions
+
+
+def secret_path(name: str) -> Path:
+    return config_dir() / name
+
+
+def secret(name: str) -> str:
+    """A random token made once, such as the endpoint's key or the web password."""
+    path = secret_path(name)
+    if not path.exists():
+        write_private(path, secrets.token_urlsafe(24) + "\n")
+    return path.read_text().strip()
+
+
+LOG_LIMIT = 10_000_000  # bytes; one older generation is kept as <name>.1
+
+
+def open_log(path: Path) -> IO[bytes]:
+    """Open a log for appending, rotating it first once it passed LOG_LIMIT."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size > LOG_LIMIT:
+        path.replace(path.with_name(path.name + ".1"))
+    return path.open("ab")
 
 
 def has_nvidia_gpu() -> bool:

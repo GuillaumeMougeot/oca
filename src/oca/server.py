@@ -13,7 +13,16 @@ from pathlib import Path
 import httpx
 
 from . import install
-from .config import OcaError, Settings, data_dir, model_path, process_alive
+from .config import (
+    OcaError,
+    Settings,
+    data_dir,
+    model_path,
+    open_log,
+    process_alive,
+    secret,
+    secret_path,
+)
 
 
 @dataclass
@@ -45,6 +54,7 @@ def command(settings: Settings, exe: Path) -> list[str]:
         "--alias", model.id,
         "--host", "127.0.0.1",
         "--port", str(port(settings)),
+        "--api-key-file", str(secret_path("api-key")),  # a file: argv is visible in `ps`
         "--ctx-size", str(settings.resolved_context),
         "--n-gpu-layers", "999" if gpu else "0",
         "--jinja",
@@ -100,6 +110,7 @@ def start(settings: Settings, timeout: float = 900) -> State:
         raise OcaError("llama.cpp is not installed; run `oca setup`")
     if not model_path(settings.resolved_model).exists():
         raise OcaError(f"model missing; run `oca pull {settings.resolved_model.id}`")
+    secret("api-key")  # make it before llama-server reads it
     cmd = command(settings, exe)
     state = read_state()
     if state and state.cmd == cmd:
@@ -107,8 +118,7 @@ def start(settings: Settings, timeout: float = 900) -> State:
     if state:
         stop()
 
-    log_path().parent.mkdir(parents=True, exist_ok=True)
-    with log_path().open("ab") as log:
+    with open_log(log_path()) as log:
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
@@ -98,6 +99,28 @@ def run(ctx: typer.Context, yes: Yes = False) -> None:
     settings = Settings.load()
     _ready(settings, yes)
     agent.launch(ctx.args)
+
+
+@app.command()
+def sessions(
+    delete: Annotated[str | None, typer.Option("--delete", help="Delete this session.")] = None,
+) -> None:
+    """List this folder's sessions (resume one with `oca -s <id>`), or delete one."""
+    agent.launch(["session", "delete", delete] if delete else ["session", "list"])
+
+
+@app.command()
+def update() -> None:
+    """Install the newest oca release, then the binaries it pins."""
+    if not install.uv_tool_installed():
+        raise OcaError(
+            "this oca was not installed with `uv tool`; update it the way you installed it"
+        )
+    tag = install.latest_release()
+    console.print(f"oca {version('oca')} -> {tag}")
+    source = f"git+{install.REPO}@{tag}"
+    subprocess.run(["uv", "tool", "install", "--force", "--python", "3.12", source], check=True)
+    os.execvp("oca", ["oca", "setup"])  # the new oca installs what its pins need
 
 
 @app.command("web")
@@ -309,6 +332,8 @@ def cluster_up(model: ClusterModelArg = None, yes: Yes = False) -> None:
     settings = Settings.load()
     m = _cluster_model(model, settings)
     job = cluster.read("serve")
+    if job and cluster.ended(settings, job):
+        job = None  # it finished since: start or join a new one
     if job and job.model != m.id:
         what = "Stop" if job.owner else "Leave"
         _confirm(yes, f"{what} {job.model} and switch to {m.id}? `oca` works locally meanwhile.")

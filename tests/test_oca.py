@@ -181,6 +181,33 @@ def test_install_release_is_atomic_and_rejects_traversal(
     assert not (tmp_path / "bin" / "escape").exists()
 
 
+def test_files_with_keys_are_private_and_logs_rotate(monkeypatch: pytest.MonkeyPatch) -> None:
+    from oca import cluster
+
+    agent.write_config(Settings())
+    cluster._write(cluster.Job("serve", "1", "m", "t", key="k"), "serve")
+    for path in (agent.config_path(), agent.config_path(unattended=True), cluster.state_path()):
+        assert path.stat().st_mode & 0o077 == 0, path
+    assert (config.config_dir() / "api-key").stat().st_mode & 0o077 == 0
+    monkeypatch.setattr(config, "LOG_LIMIT", 10)
+    log = config.data_dir() / "logs" / "x.log"
+    for _ in range(2):
+        with config.open_log(log) as fh:
+            fh.write(b"more than ten bytes")
+    assert log.with_name("x.log.1").exists() and log.stat().st_size == 19
+
+
+def test_an_ended_job_is_forgotten_so_up_starts_anew(ucloud: dict[str, Any]) -> None:
+    from oca import cluster
+
+    s = Settings(cluster_drive="/9")
+    job = cluster.Job("serve", "42", "m", "t")
+    cluster._write(job, "serve")
+    assert not cluster.ended(s, job) and cluster.read("serve")
+    ucloud["state"] = "SUCCESS"
+    assert cluster.ended(s, job) and cluster.read("serve") is None
+
+
 def test_stale_web_state_is_ignored() -> None:
     from oca import web
 
@@ -221,6 +248,8 @@ def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:
         assert f"vllm=={config.VLLM_VERSION}" in script
         assert f"rm -f /work/oca/servers/{model.id}.json" in script  # unlisted on exit
         assert "trap unlist EXIT" in script and "export CUDA_HOME=" in script
+        keyed = cluster.serve_script(model, s, "serve-x", "k3y")
+        assert "--api-key k3y" in keyed and "Bearer k3y" in keyed and "--api-key" not in script
 
 
 def _fake_server(seen: list[str]) -> ThreadingHTTPServer:
@@ -233,7 +262,8 @@ def _fake_server(seen: list[str]) -> ThreadingHTTPServer:
             self.end_headers()
 
         def do_POST(self) -> None:
-            seen.append(json.loads(self.rfile.read(int(self.headers["Content-Length"])))["model"])
+            model = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["model"]
+            seen.append(f"{model} {self.headers.get('Authorization')}")
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
@@ -263,7 +293,7 @@ def test_router_uses_the_cluster_while_it_answers_then_falls_back_mid_session(
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     s = Settings(port=port, cluster_port=remote.server_address[1])
-    job = cluster.Job("serve", "1", "deepseek-v4.1-flash", "t")
+    job = cluster.Job("serve", "1", "deepseek-v4.1-flash", "t", key="job-key")
     monkeypatch.setattr(cluster, "read", lambda kind: job)
     monkeypatch.setattr(server, "start", lambda settings: None)
     monkeypatch.setattr(server, "port", lambda settings: local.server_address[1])
@@ -271,11 +301,14 @@ def test_router_uses_the_cluster_while_it_answers_then_falls_back_mid_session(
     threading.Thread(target=endpoint.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     ask = {"model": "auto", "stream": True, "messages": []}
-    assert httpx.post(url, json=ask).text == "data: 0\n\ndata: 1\n\ndata: 2\n\n"
+    assert httpx.post(url, json=ask).status_code == 401  # another user of this machine
+    key = {"Authorization": f"Bearer {agent.api_key()}"}
+    assert httpx.post(url, json=ask, headers=key).text == "data: 0\n\ndata: 1\n\ndata: 2\n\n"
     remote.shutdown()
     remote.server_close()  # the cluster stops; the next request must not fail
-    assert httpx.post(url, json=ask).text.startswith("data: 0")
-    assert remote_seen == ["deepseek-v4.1-flash"] and local_seen == [s.resolved_model.id]
+    assert httpx.post(url, json=ask, headers=key).text.startswith("data: 0")
+    assert remote_seen == ["deepseek-v4.1-flash Bearer job-key"]  # each server gets its key
+    assert local_seen == [f"{s.resolved_model.id} Bearer {agent.api_key()}"]
     endpoint.shutdown()
     local.shutdown()
 
@@ -339,12 +372,12 @@ def test_members_join_a_listed_server_and_leaving_does_not_stop_it(
     from oca import cluster
 
     s, model = Settings(cluster_drive="/9"), config.CLUSTER_MODELS["deepseek-v4.1-flash"]
-    started = cluster.Job("serve", "42", model.id, "serve-x", endpoint="ucloud@h:2211")
+    started = cluster.Job("serve", "42", model.id, "serve-x", endpoint="ucloud@h:2211", key="k")
     cluster.publish(s, started)  # the starter's machine lists it
     joined = cluster.join(s, model)  # another member's machine
     assert joined is not None
     job, starter = joined
-    assert (job.job_id, job.owner, job.endpoint) == ("42", False, "ucloud@h:2211")
+    assert (job.job_id, job.owner, job.endpoint, job.key) == ("42", False, "ucloud@h:2211", "k")
     assert "@" in starter
     assert cluster.terminate(s, "serve") and ucloud["terminated"] == []
     ucloud["state"] = "SUCCESS"

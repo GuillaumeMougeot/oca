@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 from pathlib import Path
 from typing import Any, NoReturn
 
 from . import install
-from .config import EFFORTS, ClusterModel, OcaError, Settings, config_dir
+from .config import EFFORTS, ClusterModel, OcaError, Settings, config_dir, secret, write_private
 
 PROVIDER = "oca"
 MODEL = "auto"  # oca's router serves it with the best live server
@@ -72,8 +71,12 @@ def _provider(name: str, port: int, model_id: str, label: str, context: int) -> 
     return {
         "npm": "@ai-sdk/openai-compatible",
         "name": name,
-        # CPU prefill of a long prompt can exceed the 5 min default.
-        "options": {"baseURL": f"http://127.0.0.1:{port}/v1", "headerTimeout": 1_800_000},
+        "options": {
+            "baseURL": f"http://127.0.0.1:{port}/v1",
+            # Other users of this machine reach localhost too: the router wants this key.
+            "apiKey": api_key(),
+            "headerTimeout": 1_800_000,  # CPU prefill of a long prompt can exceed the 5 min default
+        },
         "models": {
             model_id: {
                 "name": label,
@@ -117,22 +120,20 @@ def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> d
 
 def write_config(settings: Settings, remote: ClusterModel | None = None) -> Path:
     cfg = opencode_config(settings, remote)
-    path = config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cfg, indent=2) + "\n")
+    write_private(config_path(), json.dumps(cfg, indent=2) + "\n")
     unattended = {**cfg, "permission": _refuse_asks(cfg["permission"])}
-    config_path(unattended=True).write_text(json.dumps(unattended, indent=2) + "\n")
-    return path
+    write_private(config_path(unattended=True), json.dumps(unattended, indent=2) + "\n")
+    return config_path()
 
 
 def web_password() -> str:
-    """The password of `oca web`, made once and readable only by this user."""
-    path = config_dir() / "web-password"
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch(mode=0o600)
-        path.write_text(secrets.token_urlsafe(18))
-    return path.read_text().strip()
+    """The password of `oca web`."""
+    return secret("web-password")
+
+
+def api_key() -> str:
+    """The key of oca's endpoint (router), which also guards the local llama-server."""
+    return secret("api-key")
 
 
 def launch(args: list[str], **env: str) -> NoReturn:

@@ -154,7 +154,9 @@ def run_one(task: Task, out: Path, variant: str | None, timeout: int) -> dict[st
     seconds = time.monotonic() - start
     for path, data in task.tests.items():  # the agent may have edited the tests
         (work / path).write_bytes(data)
-    return {"task": task.name, "passed": _passes(task.check, work), "seconds": round(seconds)}
+    passed = _passes(task.check, work)
+    shutil.rmtree(work, ignore_errors=True)  # its log stays; workspaces add up to gigabytes
+    return {"task": task.name, "passed": passed, "seconds": round(seconds)}
 
 
 def check(tasks: list[Task], suite: str) -> None:
