@@ -18,4 +18,4 @@ One file per question: `YYYY-MM-DD-topic.md`, dated by when it was opened. Each 
 | [2026-10-30-security](2026-10-30-security.md) | RESOLVED | Localhost is shared with other users: keys on the router, llama-server and each UCloud server; private files |
 | [2026-11-01-new-models](2026-11-01-new-models.md) | OPEN | Late-October models: only Nanbeige4.3-33B and Apex-35B deserve an eval; none beats the B200 picks on paper |
 | [2026-11-01-remotes](2026-11-01-remotes.md) | OPEN | Proposal: `oca remote` for a DGX Spark over SSH, UCloud or any URL; the router uses the largest live one |
-| [2026-11-01-phone-chat](2026-11-01-phone-chat.md) | OPEN | Phone without Termux: a Telegram bridge to OpenCode rather than OpenClaw |
+| [2026-11-01-phone-chat](2026-11-01-phone-chat.md) | OPEN | Phone without Termux: not OpenClaw; a Telegram bridge is on hold (its servers see the messages) |

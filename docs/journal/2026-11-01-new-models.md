@@ -20,8 +20,11 @@ Scores are the makers' own; none had been reproduced independently.
 
 On a Spark, decode speed is roughly 273 GB/s divided by the bytes read per token, so it needs few active parameters. gpt-oss-120b (5.1B active) measures about 50 tok/s; a 35B-A3B at 8 bits should be similar, and dense 27 to 33B models about 10. Flash-Next (183 GB) does not fit.
 
+## Harder tasks
+Flash-Next solved all 9 history tasks, so the suite is too easy at the top; 30B-class models had never run it. Five multi-file commits from 2026-10-30 join it (14 tasks), each failing before its commit and passing after (`--check`). The largest, f157bb8, puts keys on every server across 8 files.
+
 ## Next
-- 5090, when free: Nanbeige4.3-33B and Apex-35B against Qwen3.8-27B on the history suite. Expectation: Nanbeige solves more and runs about 15% slower; Apex is no better than its base.
+- 5090, shared with another job (the user agreed; 2 GiB or more stays free): Nanbeige4.3-33B (IQ4_XS, 8-bit cache), Qwen3.8-27B, Apex-35B and Qwen3.6-35B-A3B, all at 40k context, on the 14 history tasks, from branch `eval-new-models`. Expectation: Nanbeige solves more than Qwen3.8-27B and runs about 15% slower; Apex is no better than its base.
 - 1×B200, after asking: Nanbeige4.3-33B against Flash-Next.
 
 Sources: [Nanbeige 4.3](https://www.eesel.ai/blog/nanbeige-4-3), [LFM3](https://www.marktechpost.com/2026/10/27/liquid-ai-lfm3-open-weight-2b-multimodal-models/), [Apex-35B](https://huggingface.co/Apexintelligence-AI/Apex-35B-V1.0), [Clover](https://huggingface.co/Diffuspace/Clover-35B-A3B-Preview), [Clover claims](https://eu.36kr.com/en/p/4045119600399241), [Spark-X2.6](https://aiweekly.co/alerts/sparkllm-ships-spark-x26-on-device-models-in-17b-and-4b), [SenseNova-Loop](https://huggingface.co/sensenova/SenseNova-Loop-9B-Preview), [gpt-oss on a Spark](https://lmsys.org/blog/2025-11-03-gpt-oss-on-nvidia-dgx-spark).

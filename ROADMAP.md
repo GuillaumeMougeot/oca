@@ -52,4 +52,4 @@
    - v0.1.0 tagged 2026-10-30 ([changelog](CHANGELOG.md)).
 6. **Production hardening.** Done 2026-10-30, v0.2.0: keys on every server, private files, releases with `oca update`, log rotation, `oca sessions` ([journal](docs/journal/2026-10-30-security.md)).
 7. **Remotes.** Proposed 2026-11-01: a DGX Spark over SSH, UCloud, or any URL, as servers the router switches between. To be built on a branch and tested before `main` ([journal](docs/journal/2026-11-01-remotes.md)).
-8. **Phone without Termux.** Proposed 2026-11-01: a Telegram bridge to OpenCode's server, not OpenClaw ([journal](docs/journal/2026-11-01-phone-chat.md)).
+8. **Phone without Termux.** On hold since 2026-11-01: a Telegram bridge to OpenCode's server, not OpenClaw, but its servers would see the messages ([journal](docs/journal/2026-11-01-phone-chat.md)).

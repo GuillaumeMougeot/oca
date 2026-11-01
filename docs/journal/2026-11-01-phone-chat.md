@@ -1,6 +1,6 @@
 # Phone access without Termux
 
-**Status:** OPEN. Waiting for a decision.
+**Status:** OPEN, on hold since 2026-11-01. Telegram came first, but messages would pass through its servers without end-to-end encryption; revisit, or drop if it brings too little.
 
 ## Question
 The phone reaches `oca web` through an SSH tunnel opened in Termux, the hardest setup step. Would OpenClaw, which connects chat apps to an agent, do better?
