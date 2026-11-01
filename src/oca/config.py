@@ -264,7 +264,7 @@ class Remote:
     shared: str = ""  # ssh: folder of the install for all its users; "" for your own
     url: str = ""  # url: base URL of an OpenAI-compatible server
     key: str = ""  # url: its API key
-    context: int = 0  # url: its context window
+    context: int = 0  # url: its context window; ssh: the one last seen
 
 
 def _migrate(raw: dict[str, Any]) -> dict[str, Any]:

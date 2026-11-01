@@ -543,6 +543,11 @@ def _new_ssh(host: str, model: str | None, port: int, yes: bool) -> Remote:
             )
         if who == "all":
             shared = typer.prompt("Folder for it", default=remotes.SHARED_ROOT)
+            if remotes.probe(host, shared).shared:
+                console.print(f"{host} has oca for all its users in {shared}; using it.")
+                return Remote(
+                    "ssh", model=model or DEFAULT_MODEL["cpu"], port=port, host=host, shared=shared
+                )
         if shared or not found.personal:
             with console.status(f"Installing oca on {host}; this takes a few minutes"):
                 remotes.install(host, shared)
@@ -609,7 +614,12 @@ def _up(settings: Settings, name: str, model: str | None, yes: bool) -> str | No
         settings.save()
     if r.kind == "ssh":
         with console.status(f"Starting {r.model} on {r.host}"):
-            return remotes.up(settings, name)
+            doing = remotes.up(settings, name)
+        conn = remotes.read_conn(name)
+        if conn and conn.context != r.context:  # what OpenCode should plan for next time
+            r.context = conn.context
+            settings.save()
+        return doing
     m = _cluster_model(r.model)
     job = cluster.read("serve")
     if job and cluster.ended(r, job):

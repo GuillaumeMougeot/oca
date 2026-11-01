@@ -115,7 +115,7 @@ def context(settings: Settings, name: str) -> int:
         return CLUSTER_MODELS[r.model].context
     if r.kind == "ssh":
         conn = read_conn(name)
-        return conn.context if conn else MODELS[r.model].context
+        return conn.context if conn else r.context or MODELS[r.model].context
     return r.context
 
 

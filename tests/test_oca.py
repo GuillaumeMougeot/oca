@@ -407,6 +407,10 @@ def test_a_smaller_server_sees_the_latest_turns_that_fit() -> None:
     assert kept[1]["content"][1:] == turns[4]["content"]  # starts at a user turn, untouched
     kept, dropped = router.fit(turns, 1)  # nothing fits: still the last user turn
     assert dropped == 5 and kept[-1]["content"].endswith("go on")
+    small = Backend("spark", "u", "m", "", 1000)
+    long_ask = {"model": "ucloud", "messages": turns, "max_tokens": 100}
+    assert router._retarget(long_ask, small, room=262144)[1] == 3  # stands in for ucloud
+    assert router._retarget(long_ask, small)[1] == 0  # OpenCode sized it for this server
 
 
 def test_tunnel_binds_localhost_and_pins_host_keys_per_job(tmp_path: Path) -> None:

@@ -89,12 +89,10 @@ class Router:
         self._told[requested] = now
         if now == before:
             return ""
-        if now == (requested, False):
+        if to.name == requested:
             return f"↪ oca: {requested} replies again."
-        said = [] if to.name == requested else [f"{requested} is not answering"]
-        size = f"{to.context // 1000}k tokens"
-        said.append(f"{to.name} replies" + (f", seeing the latest {size}" if dropped else ""))
-        return f"↪ oca: {', so '.join(said)}."
+        said = f"↪ oca: {requested} is not answering, so {to.name} replies"
+        return said + (f", seeing the latest {to.context // 1000}k tokens." if dropped else ".")
 
 
 def fit(messages: list[Any], budget: int) -> tuple[list[Any], int]:
@@ -134,9 +132,10 @@ def fit(messages: list[Any], budget: int) -> tuple[list[Any], int]:
     return [*messages[:head], first, *rest[cut + 1 :]], cut
 
 
-def _retarget(payload: dict[str, Any], to: Backend) -> tuple[bytes, int]:
-    """The request for ``to``: its model id, oca's effort in its own terms, and the latest
-    messages that fit its context. Returns the body and how many messages were left out."""
+def _retarget(payload: dict[str, Any], to: Backend, room: int = 0) -> tuple[bytes, int]:
+    """The request for ``to``: its model id, and oca's effort in its own terms. When OpenCode
+    sized the conversation for a server holding ``room`` tokens and ``to`` holds fewer, only
+    the latest messages that fit. Returns the body and how many messages were left out."""
     payload = {**payload, "model": to.model}
     level = payload.pop("reasoning_effort", None)
     kwargs = payload.get("chat_template_kwargs") or {}
@@ -147,7 +146,7 @@ def _retarget(payload: dict[str, Any], to: Backend) -> tuple[bytes, int]:
     if kwargs:
         payload["chat_template_kwargs"] = kwargs
     dropped = 0
-    if to.context and isinstance(payload.get("messages"), list):
+    if 0 < to.context < room and isinstance(payload.get("messages"), list):
         reply = int(payload.get("max_tokens") or payload.get("max_completion_tokens") or 0)
         budget = to.context - (reply or to.context // 4)
         payload["messages"], dropped = fit(payload["messages"], budget)
@@ -193,7 +192,9 @@ def handler(router: Router) -> type[BaseHTTPRequestHandler]:
                     to = router.backend(requested, skip)
                 except OcaError as e:
                     return self._error(503, f"no model is up: {e}")
-                content, dropped = _retarget(payload, to) if payload else (body, 0)
+                # OpenCode compacts for the requested server; a smaller stand-in sees less.
+                room = 0 if to.name == requested else remotes.context(router.settings, requested)
+                content, dropped = _retarget(payload, to, room) if payload else (body, 0)
                 # Agent steps carry tools; title and summary requests get no note.
                 note = router.note(requested, to, dropped) if payload and "tools" in payload else ""
                 headers = {
