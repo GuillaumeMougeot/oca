@@ -45,6 +45,7 @@ SPOILERS = (".meta", ".approaches", ".articles")
 # commits (whole subsystems at once) and one-line changes.
 HISTORY = ["5d78a6e", "24f112d", "082c77e", "3af6145", "848cc1f"]
 HISTORY += ["bd219fb", "6d415d3", "9802449", "cbec775"]
+HISTORY += ["385cbf1", "cbaf49b", "f157bb8", "10659fe", "530f068"]  # multi-file, 10-30
 
 
 @dataclass

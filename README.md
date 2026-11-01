@@ -17,4 +17,6 @@ oca web                      # OpenCode in a browser, e.g. on a phone
 
 How to use it: [docs/guide.md](docs/guide.md), also at [guillaumemougeot.github.io/oca](https://guillaumemougeot.github.io/oca/). Status: [ROADMAP.md](ROADMAP.md). Why things are the way they are: [docs/journal](docs/journal/README.md).
 
+**Why oca:** tools such as `ollama launch` connect a coding agent to a model on your own computer. oca also runs open models on the GPUs a team can reach, such as a UCloud allocation or a DGX Spark, shares those servers between colleagues, and carries a session over when one stops. Your code and prompts stay on machines you control.
+
 Development: `uv sync`, then `uv run pytest`, `uv run ruff check .`, `uv run mypy`.
