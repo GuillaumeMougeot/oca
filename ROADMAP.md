@@ -1,6 +1,6 @@
 # Roadmap
 
-**Last updated:** 2026-10-30
+**Last updated:** 2026-11-01
 
 ## Architecture
 
@@ -42,7 +42,7 @@
    - Next: try sharing with a real second UCloud account.
    - A cluster model for one B200: done, Qwen3.8-Flash-Next. Single B200s start within minutes, while pairs waited 1.5 to 2 h.
    - Transparent model switching, as in Claude Code: done. OpenCode sees one model, served by oca's router from the best live server ([journal](docs/journal/2026-10-30-model-switching.md)).
-3. **Eval.** Done for now, 2026-10-30: `eval/run.py` scores the agent on Aider's 34 Python exercises and on 9 changes from oca's own history. At high effort, Flash-Next solves both: 34/34 and 9/9, once unattended runs refuse instead of asking. Next: the local CPU model and DeepSeek on the same suites, and harder tasks to rank them ([journal](docs/journal/2026-10-30-eval.md)). A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU, and Flash-Next against DeepSeek on quality.
+3. **Eval.** Done for now, 2026-10-30: `eval/run.py` scores the agent on Aider's 34 Python exercises and on 9 changes from oca's own history. At high effort, Flash-Next solves both: 34/34 and 9/9, once unattended runs refuse instead of asking. Next: the local CPU model and DeepSeek on the same suites, and harder tasks to rank them ([journal](docs/journal/2026-10-30-eval.md)). A fixed set of small repo tasks; compare local cpu/gpu with the cluster on pass rate, wall time and GPU-hours. Pick defaults. Includes vLLM against llama.cpp on a local GPU, and Flash-Next against DeepSeek on quality. Late-October candidates: Nanbeige4.3-33B and Apex-35B ([journal](docs/journal/2026-11-01-new-models.md)).
 4. **Phone.** Done 2026-10-30: `oca web` serves OpenCode's bundled web UI in the background, on localhost with a password, reached from a phone by one SSH command; tested from an Android phone with Termux ([guide](docs/guide.md#phone-and-other-machines)).
 5. **Polish.**
    - User guide in Markdown: [docs/guide.md](docs/guide.md), published with the rest of the docs at [guillaumemougeot.github.io/oca](https://guillaumemougeot.github.io/oca/) by GitHub Pages on every push.
@@ -51,3 +51,5 @@
    - macOS (arm64, x64): built; verified by a CI install on macOS.
    - v0.1.0 tagged 2026-10-30 ([changelog](CHANGELOG.md)).
 6. **Production hardening.** Done 2026-10-30, v0.2.0: keys on every server, private files, releases with `oca update`, log rotation, `oca sessions` ([journal](docs/journal/2026-10-30-security.md)).
+7. **Remotes.** Proposed 2026-11-01: a DGX Spark over SSH, UCloud, or any URL, as servers the router switches between. To be built on a branch and tested before `main` ([journal](docs/journal/2026-11-01-remotes.md)).
+8. **Phone without Termux.** Proposed 2026-11-01: a Telegram bridge to OpenCode's server, not OpenClaw ([journal](docs/journal/2026-11-01-phone-chat.md)).
