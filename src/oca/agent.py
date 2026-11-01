@@ -67,13 +67,18 @@ def _refuse_asks(rules: Any) -> Any:
     return "deny" if rules == "ask" else rules
 
 
+def output_limit(context: int) -> int:
+    """The longest reply: a quarter of the context, as half left a 64k model 32k for the
+    conversation."""
+    return min(32768, context // 4)
+
+
 def _model(label: str, context: int) -> dict[str, Any]:
     return {
         "name": label,
         "tool_call": True,
         "reasoning": True,
-        # A quarter for the reply: half left a 64k model 32k for the conversation.
-        "limit": {"context": context, "output": min(32768, context // 4)},
+        "limit": {"context": context, "output": output_limit(context)},
         # ctrl+t in OpenCode cycles these; oca's router translates them per model.
         "variants": {e: {"reasoningEffort": e} for e in EFFORTS},
     }
@@ -121,7 +126,8 @@ def opencode_config(settings: Settings, titles: bool = False) -> dict[str, Any]:
 def write_config(settings: Settings, titles: bool = False) -> Path:
     cfg = opencode_config(settings, titles)
     write_private(config_path(), json.dumps(cfg, indent=2) + "\n")
-    unattended = {**cfg, "permission": _refuse_asks(cfg["permission"])}
+    # Nobody answers questions there; oca's router then says in a line what it would ask.
+    unattended = {**cfg, "permission": {**_refuse_asks(cfg["permission"]), "question": "deny"}}
     write_private(config_path(unattended=True), json.dumps(unattended, indent=2) + "\n")
     return config_path()
 

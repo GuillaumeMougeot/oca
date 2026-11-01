@@ -599,7 +599,9 @@ def check(remote: Remote, job: Job) -> str | None:
         if job.owner:
             _unlist(remote, job)
         tail = log_tail(remote, job)
-        raise Down(f"job {job.job_id} ended ({state.value}). Log tail:\n{tail}")
+        idle = [line[5:] for line in tail.splitlines() if line.startswith("oca: idle")]
+        why = idle[-1] if idle else str(state.value).lower()
+        raise Down(f"job {job.job_id} ended ({why}). Log tail:\n{tail}")
     if state != JobState.RUNNING:
         return str(state.value).lower().replace("_", " ")
     try:

@@ -2,7 +2,8 @@
 
 `oca serve` starts a background supervisor and answers with one line of JSON: model, port,
 key and state (installing, downloading, loading, ready). The supervisor downloads the model
-if needed, runs llama-server, and stops it after ``idle`` minutes without requests. On an
+if needed, runs llama-server, and stops it after ``idle`` minutes without requests; the
+listing keeps why it stopped, for the users who find it stopped. On an
 install for all users of a machine (OCA_SHARED=1) everyone's oca joins this one server;
 only its starter can stop it or change its model.
 """
@@ -64,7 +65,7 @@ def _set(**fields: Any) -> None:
 def status() -> dict[str, Any]:
     entry = _read()
     if not process_alive(int(entry.get("pid", 0)), "oca.serve"):
-        return {"state": "stopped"}
+        return {"state": "stopped", "why": entry.get("why", "")}
     return {
         **{k: entry[k] for k in ("state", "model", "context", "started_by")},
         "port": server.port(Settings.load()),
@@ -121,8 +122,9 @@ def stop() -> bool:
     raise OcaError(f"the server did not stop; see {log_path()}")
 
 
-def _idle(settings: Settings, minutes: int) -> None:
-    """Return once llama-server is gone, or after ``minutes`` without requests (0: never)."""
+def _idle(settings: Settings, minutes: int) -> str:
+    """Return once llama-server is gone, or after ``minutes`` without requests (0: never);
+    says which."""
     url = f"http://127.0.0.1:{server.port(settings)}/metrics"
     headers = {"Authorization": f"Bearer {secret('api-key')}"}
     quiet, last = 0, ""
@@ -137,13 +139,15 @@ def _idle(settings: Settings, minutes: int) -> None:
         last = now
         if minutes and quiet >= minutes:
             print(f"idle for {minutes} min, stopping", flush=True)
-            return
+            return f"idle for {minutes} min"
+    return "llama-server exited; `oca remote logs` shows why"
 
 
 def supervise(idle: int) -> None:
-    """The background process: install, download, serve, stop when idle, unlist."""
+    """The background process: install, download, serve, stop when idle, say why."""
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # runs the cleanup below
     _set(pid=os.getpid(), state="starting")
+    why = f"stopped by {getpass.getuser()}"  # SIGTERM, from `oca remote down`
     try:
         settings = Settings.load()
         if not install.is_installed():
@@ -155,11 +159,14 @@ def supervise(idle: int) -> None:
         _set(state="loading")
         server.start(settings)
         _set(state="ready")
-        _idle(settings, idle)
+        why = _idle(settings, idle)
+    except Exception as e:
+        why = f"failed: {e}"
+        raise
     finally:
         server.stop()
         if _read().get("pid") == os.getpid():
-            listing_path().unlink(missing_ok=True)
+            _set(state="stopped", why=f"{why}, at {time.strftime('%H:%M')}")
 
 
 if __name__ == "__main__":

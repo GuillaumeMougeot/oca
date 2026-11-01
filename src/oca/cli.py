@@ -18,6 +18,7 @@ import click
 import httpx
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from . import agent, cluster, install, remotes, router, serve, server, web
@@ -27,13 +28,13 @@ from .config import (
     MODELS,
     NAME,
     ClusterModel,
-    Down,
     OcaError,
     Remote,
     Settings,
     data_dir,
     model_path,
 )
+from .remotes import Choice
 
 app = typer.Typer(
     name="oca",
@@ -60,8 +61,12 @@ def _confirm(yes: bool, question: str, default: bool = True) -> None:
         raise typer.Exit(1)
 
 
-def _ready(settings: Settings, name: str | None = None, yes: bool = False) -> str:
-    """Make server ``name`` (default: the default server) answer, or another meanwhile."""
+def _ready(
+    settings: Settings, name: str | None = None, yes: bool = False, pick: bool = True
+) -> str:
+    """Make server ``name`` (default: the default server) answer or start; returns the server
+    to use. When it is down, asks: restart it, use another server, or cancel. Without
+    ``pick``, only offers the restart; OpenCode's sessions ask about the rest."""
     if not install.is_installed():
         console.print("[bold]First run: installing llama.cpp and OpenCode[/]")
         install.setup()
@@ -70,28 +75,76 @@ def _ready(settings: Settings, name: str | None = None, yes: bool = False) -> st
     name = name or settings.default
     if name not in settings.servers():
         raise OcaError(f"unknown server {name!r}; see `oca remote`")
-    doing = None if name == "local" else _connect(settings, name, yes)
-    others: list[str] = []
-    if doing is not None:
-        others = [n for n in settings.remotes if n != name and _answers(settings, n)]
-        meanwhile = others[0] if others else "the local model"
-        console.print(
-            f"[yellow]{name}: {doing}. `oca` uses {meanwhile} meanwhile and switches by itself.[/]"
-        )
-    if name == "local" or (doing is not None and not others):
-        _local(settings, yes, required=name == "local")
+    try:
+        if name == "local":
+            _local(settings, yes)
+            doing = None
+        else:
+            with console.status(f"Connecting to {name}"):
+                doing = remotes.check(settings, name)
+    except OcaError as e:
+        name, doing = _instead(settings, name, f"{name} is not answering: {_why(e)}", yes, pick)
     router.ensure(settings)
-    agent.write_config(settings, titles=name != "local" and doing is None)
+    agent.write_config(settings, titles=name == settings.default != "local" and doing is None)
+    if doing not in (None, "down"):
+        console.print(f"{name}: {doing}. OpenCode's first reply waits for it.")
     return name
 
 
-def _local(settings: Settings, yes: bool, required: bool) -> None:
-    """Start the local model server; download the model first if it is ``required``."""
+def _why(e: Exception) -> str:
+    """The first line of an error, which says what happened."""
+    return (str(e).strip().splitlines() or [type(e).__name__])[0].rstrip(".")
+
+
+def _instead(
+    settings: Settings, down: str, title: str, yes: bool, pick: bool
+) -> tuple[str, str | None]:
+    """Ask what to do while ``down`` is down, and do it: restart it, start or use another
+    server, or cancel. Returns the server to use and what it is doing (None: it answers)."""
+    if yes or not pick:  # restart only
+        offered = remotes.choices(settings, down, lambda n: False)
+        restart = [c for c in offered if c.label == f"Restart {down}"]
+        console.print(f"[yellow]{escape(title)}[/]")
+        if restart and (yes or typer.confirm(f"Restart it ({restart[0].description})?")):
+            try:
+                return down, _start(settings, down)
+            except OcaError as e:
+                if yes:
+                    raise
+                console.print(f"[yellow]{down} did not start:[/] {escape(_why(e))}")
+        console.print("Its sessions will ask what to do.")
+        return down, "down"
+    failed: set[str] = set()
+    while True:
+        options = remotes.choices(settings, down, lambda n: _live(settings, n), failed)
+        console.print(f"[yellow]{escape(title)}[/]")
+        for i, c in enumerate([*options, Choice("Cancel", "Do not open OpenCode")], 1):
+            console.print(f"  {i}. [bold]{escape(c.label)}[/]: {escape(c.description)}")
+        n = typer.prompt("Choose", default=1, type=click.IntRange(1, len(options) + 1))
+        if n > len(options):
+            raise typer.Exit(1)
+        verb, server_name = options[n - 1].label.split()[:2]
+        if verb == "Use" and _live(settings, server_name):
+            return server_name, None
+        try:
+            return server_name, _start(settings, server_name)
+        except OcaError as e:
+            failed.add(server_name)
+            title = f"{server_name} did not start: {_why(e)}"
+
+
+def _start(settings: Settings, name: str) -> str | None:
+    """Start server ``name``, already approved; None once it answers, else what it does."""
+    if name == "local":
+        _local(settings, yes=False)
+        return None
+    return _up(settings, name, None, yes=True)
+
+
+def _local(settings: Settings, yes: bool) -> None:
+    """Start the local model server, downloading the model first."""
     model = settings.resolved_model
     if not model_path(model).exists():
-        if not required:
-            console.print("[yellow]No local model to use meanwhile; `oca pull` downloads one.[/]")
-            return
         where = model_path(model).parent
         _confirm(yes, f"Download {model.id} ({model.size_gb} GB) to {where}?")
         install.pull(model)
@@ -99,30 +152,13 @@ def _local(settings: Settings, yes: bool, required: bool) -> None:
         server.start(settings)
 
 
-def _answers(settings: Settings, name: str) -> bool:
+def _live(settings: Settings, name: str) -> bool:
+    """Whether server ``name`` answers now."""
+    if name == "local":
+        state = server.read_state()
+        return state is not None and server.healthy(state.port)
     found = remotes.backend(settings, name)
     return found is not None and remotes.healthy(found)
-
-
-def _connect(settings: Settings, name: str, yes: bool) -> str | None:
-    """Connect to remote ``name``, offering to start it; None when it answers."""
-    try:
-        with console.status(f"Connecting to {name}"):
-            return remotes.check(settings, name)
-    except Down:
-        pass
-    except OcaError as e:
-        console.print(f"[yellow]{name}:[/] {e}")
-        return "unreachable"
-    r = settings.remotes[name]
-    if r.kind == "url":
-        return "not answering"
-    if r.kind == "ssh" and not (yes or typer.confirm(f"Start {r.model} on {r.host}?")):
-        return "not started"
-    try:
-        return _up(settings, name, None, yes)
-    except typer.Exit:
-        return "not started"
 
 
 def _first_run(settings: Settings) -> None:
@@ -166,7 +202,9 @@ def main(
         name = _ready(settings, remote, yes)
         args = ["--continue"] if resume else []
         args += ["--session", session] if session else []
-        args += ["--model", f"{agent.PROVIDER}/{name}"] if remote else []
+        args += (
+            ["--model", f"{agent.PROVIDER}/{name}"] if remote or name != settings.default else []
+        )
         agent.launch(args)
 
 
@@ -174,8 +212,10 @@ def main(
 def run(ctx: typer.Context, yes: Yes = False) -> None:
     """Like `oca`, passing extra arguments to OpenCode (e.g. `oca run -- run "fix the tests"`)."""
     settings = Settings.load()
-    _ready(settings, None, yes)
-    agent.launch(ctx.args)
+    name, args = _ready(settings, None, yes), ctx.args
+    if name != settings.default and args[:1] in ([], ["run"]):
+        args = [*args, "--model", f"{agent.PROVIDER}/{name}"]
+    agent.launch(args)
 
 
 @app.command()
@@ -223,7 +263,7 @@ def web_ui(
     if ctx.invoked_subcommand is not None:
         return
     settings = Settings.load()
-    _ready(settings, None, yes)
+    _ready(settings, None, yes, pick=False)
     state = web.start(port, Path.cwd())
     console.print(
         f"OpenCode for {state['project']} at http://127.0.0.1:{port}, user opencode, "
@@ -632,53 +672,21 @@ def remote_set(
 def _up(settings: Settings, name: str, model: str | None, yes: bool) -> str | None:
     """Start remote ``name``'s server, or join a running one; None once it answers."""
     r = settings.remotes[name]
-    if r.kind == "url":
-        return remotes.check(settings, name)
     if model and model != r.model:
         r.model = model
         settings.validate()
         settings.save()
-    if r.kind == "ssh":
-        with console.status(f"Starting {r.model} on {r.host}"):
-            doing = remotes.up(settings, name)
-        conn = remotes.read_conn(name)
-        if conn and conn.context != r.context:  # what OpenCode should plan for next time
-            r.context = conn.context
-            settings.save()
+    if r.kind == "ucloud":
+        doing = remotes.start(settings, name, lambda q: _confirm(yes, q), console.print)
+        router.ensure(settings)  # its background check opens the tunnel once the job runs
         return doing
-    m = _cluster_model(r.model)
-    job = cluster.read("serve")
-    if job and cluster.ended(r, job):
-        job = None  # it finished since: start or join a new one
-    if job and job.model != m.id:
-        what = "Stop" if job.owner else "Leave"
-        _confirm(yes, f"{what} {job.model} and switch to {m.id}? Another server answers meanwhile.")
-        cluster.terminate(r, "serve")
-        job = None
-    if job is None:
-        if key := cluster.unregistered_key():
-            raise OcaError(
-                "UCloud does not know this machine's SSH key, so the tunnel would fail. "
-                f"Register it once: `oca ucloud ssh-keys add {key} --title $(hostname)`"
-            )
-        if shared := cluster.join(r, m):
-            job, starter = shared
-            console.print(f"Joining {m.id}, started by {starter} (job {job.job_id}).")
-    if job is None:
-        if m.size_gb > 100 and not cluster.weights_ready(r, m):
-            raise OcaError(
-                f"{m.id} ({m.size_gb:g} GB) is not on the drive yet. Run `oca remote pull "
-                f"{name} {m.id}` first, so the download does not spend GPU-hours."
-            )
-        _confirm(
-            yes,
-            f"Serve {m.id} on {m.gpus}x B200 for up to {r.hours} h ({m.gpus * r.hours} "
-            f"GPU-hours max, stops after {r.idle} idle min)?",
-        )
-        job = cluster.submit_serve(r, m)
-        console.print(f"Job {job.job_id} submitted.")
-    router.ensure(settings)  # its background check opens the tunnel once the job runs
-    return cluster.check(r, job)  # one attempt: it may answer already
+    with console.status(f"Starting {r.model} on {r.host}" if r.kind == "ssh" else "Connecting"):
+        doing = remotes.start(settings, name)
+    conn = remotes.read_conn(name)
+    if conn and conn.context != r.context:  # what OpenCode should plan for next time
+        r.context = conn.context
+        settings.save()
+    return doing
 
 
 @remote_app.command("up")
@@ -690,7 +698,7 @@ def remote_up(
 ) -> None:
     """Start a remote's server, or join a running one, and return.
 
-    `oca` uses another server meanwhile and switches once this one answers.
+    Sessions on it wait for it meanwhile.
     """
     settings = Settings.load()
     name = _remote(settings, name)
@@ -707,9 +715,7 @@ def remote_up(
     if doing is None:
         console.print(f"{name} answers; {how} uses it.")
     else:
-        console.print(
-            f"{name}: {doing}. {how} switches to it once it answers; `oca remote` shows it."
-        )
+        console.print(f"{name}: {doing}. {how} waits for it; `oca remote` shows its state.")
 
 
 @remote_app.command("down")

@@ -9,7 +9,7 @@ oca (Open Coding Agent) installs and runs a coding agent built only from open-so
 - llama.cpp for local inference,
 - vLLM on UCloud B200s, driven through [ucloud-api](https://github.com/GuillaumeMougeot/ucloud-api),
 - `oca serve` on machines reached over SSH, such as a DGX Spark ("remotes"),
-- oca's router, which gives OpenCode one model per server and falls back to the next live one.
+- oca's router, which gives OpenCode one model per server; when one is down, it asks through OpenCode's own question menu whether to restart it or use another.
 
 Goal: installing it is as easy as uv or Claude Code, plus one model download. oca is glue: configure upstream tools, don't rebuild them.
 

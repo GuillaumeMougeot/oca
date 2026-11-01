@@ -20,7 +20,9 @@ curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.s
 - **`oca run -- run "fix the failing test"`** runs one task without the terminal UI.
 - **`oca web`** opens OpenCode in a browser; see [Phone](#phone-and-other-machines).
 
-OpenCode lists one model per server: `oca/local` and one per remote; `ctrl+x m` switches mid-session. When a session's server stops, the next one that answers replies, and says so in one line: the default server, the other remotes by context window, then this machine. A server with a smaller context window sees only the latest messages; the session keeps its whole history for when its server is back.
+OpenCode lists one model per server: `oca/local` and one per remote; `ctrl+x m` switches mid-session.
+
+**When a server is down,** oca never switches by itself. It asks in a menu, in OpenCode (↑↓ and Enter), saying why the server is down: restart it, use another server, or stop. If the restart fails, it says why and asks again. While a server starts, the reply shows its progress. A server used instead serves until the session's own server answers again, and says so in one line. If its context window is smaller, it sees only the latest messages; the session keeps its whole history. Launched while its server is down, `oca` asks the same in the terminal.
 
 **Sessions:** `oca sessions` lists this folder's sessions; `oca sessions --delete <id>` deletes one, and `oca sessions --clear` all those started in this folder or below. `oca -c` reopens the last session, and `oca -s <id>` a given one. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles when a remote answers at launch; the local CPU model skips them, since a title costs 40 to 80 s there.
 
@@ -60,13 +62,13 @@ Besides this machine (`local`), oca uses remotes: UCloud, a machine you reach ov
 | Command | Does |
 |---|---|
 | `oca remote add <name> <target>` | add one: `ucloud`, `you@host`, or a URL |
-| `oca remote up [name] [model]` | start its server, or join a running one; it returns at once, and `oca` switches once it answers (`--wait` blocks) |
+| `oca remote up [name] [model]` | start its server, or join a running one; it returns at once, and sessions on it wait for it (`--wait` blocks) |
 | `oca remote down [name]` | stop your server, or leave one you joined |
 | `oca remote default <name>` | the server plain `oca` uses; `local` is this machine |
 | `oca remote set <name> idle 30` | change a setting: `idle`, `hours`, `model`, `port`, `context` |
 | `oca remote logs [name] -f`, `oca remote remove <name>` | its log; forget it |
 
-When the default server is down, plain `oca` offers to start it.
+When the default server is down, plain `oca` offers to restart it, or another server.
 
 ### A machine over SSH
 
@@ -91,7 +93,7 @@ Once per project, download the weights: `oca remote pull ucloud [model]`. This r
 | `deepseek-v4.1-flash` | 2 | about 25 min | stronger; pairs can queue for hours |
 | `qwen3.8-27b-fp8` | 1 | about 5 min | small |
 
-**Switching model:** run `oca remote up ucloud deepseek-v4.1-flash`. It offers to stop or leave the current server. Another server answers meanwhile.
+**Switching model:** run `oca remote up ucloud deepseek-v4.1-flash`. It offers to stop or leave the current server. Replies wait for the new one meanwhile, showing its progress.
 
 **Cost and timeouts:** a server stops after `idle` minutes without requests (default 60), and a job runs at most `hours` (default 8): `oca remote set ucloud idle 30`. Queue time is free. A server shared by several people costs the same as one.
 

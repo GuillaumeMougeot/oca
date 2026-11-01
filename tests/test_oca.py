@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from oca import agent, config, install, server
-from oca.config import OcaError, Remote, Settings
+from oca.config import Down, OcaError, Remote, Settings
 from oca.remotes import Backend
 
 UCLOUD = Remote("ucloud", model="deepseek-v4.1-flash", port=8001, drive="/9")
@@ -142,6 +142,7 @@ def test_unattended_runs_refuse_instead_of_asking() -> None:
     unattended = json.loads(agent.config_path(unattended=True).read_text())["permission"]
     assert "ask" in values(interactive) and "ask" not in values(unattended)
     assert unattended["bash"]["rm *"] == "deny" and unattended["bash"]["*"] == "allow"
+    assert unattended["question"] == "deny" and "question" not in interactive
 
 
 def test_router_translates_effort_for_each_model() -> None:
@@ -302,7 +303,9 @@ def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:
         assert "--api-key k3y" in keyed and "Bearer k3y" in keyed and "--api-key" not in script
 
 
-def _fake_server(seen: list[str]) -> ThreadingHTTPServer:
+def _fake_server(
+    seen: list[str], bodies: list[Any] | None = None, port: int = 0
+) -> ThreadingHTTPServer:
     """An OpenAI-like server: /health answers, a completion streams three events."""
 
     class Handler(BaseHTTPRequestHandler):
@@ -312,8 +315,10 @@ def _fake_server(seen: list[str]) -> ThreadingHTTPServer:
             self.end_headers()
 
         def do_POST(self) -> None:
-            model = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["model"]
-            seen.append(f"{model} {self.headers.get('Authorization')}")
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append(f"{body['model']} {self.headers.get('Authorization')}")
+            if bodies is not None:
+                bodies.append(body)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
@@ -324,68 +329,290 @@ def _fake_server(seen: list[str]) -> ThreadingHTTPServer:
         def log_message(self, format: str, *args: object) -> None:
             pass
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
 
 
-def test_router_uses_a_server_while_it_answers_then_the_next_one_and_says_so(
-    monkeypatch: pytest.MonkeyPatch,
+ASK_TOOL = {"type": "function", "function": {"name": "question", "parameters": {}}}
+
+
+def _events(text: str) -> list[Any]:
+    """The JSON events of a streamed reply."""
+    return [json.loads(e[6:]) for e in text.split("\n\n") if e.startswith("data: {")]
+
+
+def _question(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The tool call that ends a reply of oca's, and the question in it."""
+    call = _events(text)[-2]["choices"][0]["delta"]["tool_calls"][0]
+    return call, json.loads(call["function"]["arguments"])["questions"][0]
+
+
+def _answered(messages: list[Any], call: dict[str, Any], label: str) -> list[Any]:
+    """``messages`` after the user picked ``label``, as OpenCode sends them."""
+    said = f'User has answered your questions: "q"="{label}". You can now continue.'
+    return [
+        *messages,
+        {"role": "assistant", "content": "", "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": call["id"], "content": said},
+    ]
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def test_router_asks_before_another_server_replies_and_returns_when_back(
+    monkeypatch: pytest.MonkeyPatch, no_gpu: None
 ) -> None:
     import httpx
 
-    from oca import cluster, router
+    from oca import cluster, remotes, router
 
     remote_seen: list[str] = []
     local_seen: list[str] = []
-    remote, local = _fake_server(remote_seen), _fake_server(local_seen)
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
+    local_bodies: list[Any] = []
+    remote, local = _fake_server(remote_seen), _fake_server(local_seen, local_bodies)
+    port = _free_port()
     ucloud = Remote("ucloud", model="deepseek-v4.1-flash", port=remote.server_address[1])
-    s = Settings(port=port, default="ucloud", remotes={"ucloud": ucloud})
+    s = Settings(port=port, default="ucloud", context=65536, remotes={"ucloud": ucloud})
     config.model_path(s.resolved_model).parent.mkdir(parents=True)
-    config.model_path(s.resolved_model).touch()  # the local model is there to fall back to
+    config.model_path(s.resolved_model).touch()
     job = cluster.Job("serve", "1", "deepseek-v4.1-flash", "t", key="job-key")
     monkeypatch.setattr(cluster, "read", lambda kind: job)
     monkeypatch.setattr(server, "start", lambda settings: None)
     monkeypatch.setattr(server, "port", lambda settings: local.server_address[1])
-    endpoint = ThreadingHTTPServer(("127.0.0.1", port), router.handler(router.Router(s)))
+    monkeypatch.setattr(router, "CHECK_S", -1)  # every request checks health again
+    rt = router.Router(s)
+    endpoint = ThreadingHTTPServer(("127.0.0.1", port), router.handler(rt))
     threading.Thread(target=endpoint.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
-    step = {"model": "ucloud", "stream": True, "messages": [], "tools": []}
+    ask = [{"role": "user", "content": "fix it"}]
+    step = {"model": "ucloud", "stream": True, "messages": ask, "tools": [ASK_TOOL]}
     assert httpx.post(url, json=step).status_code == 401  # another user of this machine
     key = {"Authorization": f"Bearer {agent.api_key()}"}
     assert httpx.post(url, json=step, headers=key).text == "data: 0\n\ndata: 1\n\ndata: 2\n\n"
     old = {"model": "auto", "stream": True, "messages": []}  # a session from before remotes
     assert httpx.post(url, json=old, headers=key).text.startswith("data: 0")
+
     remote.shutdown()
-    remote.server_close()  # the server stops mid-session; the next request must not fail
-    moved = httpx.post(url, json=step, headers=key).text
-    note, rest = moved.split("\n\n", 1)
-    assert "ucloud is not answering, so local replies" in note and rest.startswith("data: 0")
-    assert httpx.post(url, json=step, headers=key).text.startswith("data: 0")  # said once
-    assert remote_seen == ["deepseek-v4.1-flash Bearer job-key"] * 2  # each server, its key
+    remote.server_close()  # the job ends mid-session: oca asks, it does not switch
+    gone = Down("job 1 ended (idle for 60 min). Log tail:\n...")
+    monkeypatch.setattr(remotes, "check", lambda settings, name: (_ for _ in ()).throw(gone))
+    asked = httpx.post(url, json=step, headers=key).text
+    call, question = _question(asked)
+    assert question["header"] == "oca: ucloud is down" and call["id"].startswith("oca_")
+    assert question["question"].startswith("ucloud is not answering: job 1 ended (idle for 60 min)")
+    labels = [o["label"] for o in question["options"]]
+    assert labels == ["Restart ucloud", "Use local", "Stop"] and not local_seen
+    assert "16 GPU-hours" in question["options"][0]["description"]
+    assert _events(asked)[-1]["choices"][0]["finish_reason"] == "tool_calls"
+
+    picked = {**step, "messages": _answered(ask, call, "Use local")}
+    moved = httpx.post(url, json=picked, headers=key).text
+    notes = [e["choices"][0]["delta"]["content"] for e in _events(moved)]
+    assert notes[0] == "↪ oca: starting local…\n\n"
+    assert notes[1] == (
+        "↪ oca: local replies while ucloud is down; it sees only the latest 65k tokens.\n\n"
+    )
+    assert moved.endswith("data: 0\n\ndata: 1\n\ndata: 2\n\n")
+    assert local_bodies[-1]["messages"] == ask  # the model never sees oca's question
+    assert httpx.post(url, json=step, headers=key).text == "data: 0\n\ndata: 1\n\ndata: 2\n\n"
+
+    back = _fake_server(remote_seen, port=ucloud.port)  # someone restarted it
+    returned = httpx.post(url, json=step, headers=key).text
+    assert _events(returned)[0]["choices"][0]["delta"]["content"] == (
+        "↪ oca: ucloud answers again.\n\n"
+    )
+    assert returned.endswith("data: 0\n\ndata: 1\n\ndata: 2\n\n") and not rt.chosen
+    assert remote_seen == ["deepseek-v4.1-flash Bearer job-key"] * 3  # each server, its key
     assert local_seen == [f"{s.resolved_model.id} Bearer {agent.api_key()}"] * 2
+    for httpd in (endpoint, local, back):
+        httpd.shutdown()
+
+
+def test_router_says_why_a_restart_failed_and_offers_the_rest(
+    monkeypatch: pytest.MonkeyPatch, no_gpu: None
+) -> None:
+    import httpx
+
+    from oca import remotes, router
+
+    port = _free_port()
+    s = Settings(port=port, default="spark", remotes={"spark": SPARK})  # no local model
+    stopped = Down("its server stopped: idle for 60 min, at 14:02")
+    unreachable = OcaError("cannot reach spark over SSH (No route to host).\nMore")
+    monkeypatch.setattr(remotes, "check", lambda settings, name: (_ for _ in ()).throw(stopped))
+    monkeypatch.setattr(remotes, "start", lambda settings, name: (_ for _ in ()).throw(unreachable))
+    endpoint = ThreadingHTTPServer(("127.0.0.1", port), router.handler(router.Router(s)))
+    threading.Thread(target=endpoint.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    key = {"Authorization": f"Bearer {agent.api_key()}"}
+    ask = [{"role": "user", "content": "fix it"}]
+    step = {"model": "spark", "stream": True, "messages": ask, "tools": [ASK_TOOL]}
+    call, question = _question(httpx.post(url, json=step, headers=key).text)
+    assert [o["label"] for o in question["options"]] == ["Restart spark", "Stop"]
+
+    picked = {**step, "messages": _answered(ask, call, "Restart spark")}
+    failed = httpx.post(url, json=picked, headers=key).text
+    assert _events(failed)[0]["choices"][0]["delta"]["content"] == "↪ oca: starting spark…\n\n"
+    call, question = _question(failed)
+    assert question["question"] == (
+        "spark did not start: cannot reach spark over SSH (No route to host). What should oca do?"
+    )
+    assert [o["label"] for o in question["options"]] == ["Try spark again", "Stop"]
+
+    stop = httpx.post(url, json={**step, "messages": _answered(ask, call, "Stop")}, headers=key)
+    said = _events(stop.text)
+    assert said[0]["choices"][0]["delta"]["content"].startswith(
+        "↪ oca: spark stays down. `oca remote up spark` restarts it"
+    )
+    assert said[-1]["choices"][0]["finish_reason"] == "stop"
+    run = httpx.post(url, json={**step, "tools": []}, headers=key).text  # `opencode run`
+    assert _events(run)[0]["choices"][0]["delta"]["content"] == (
+        "↪ oca: spark is not answering: its server stopped: idle for 60 min, at 14:02. "
+        "`oca remote up spark` restarts it; ctrl+x m picks another server.\n\n"
+    )
+    title = httpx.post(url, json={**step, "stream": False}, headers=key)
+    assert title.status_code == 424 and "not answering" in title.json()["error"]["message"]
     endpoint.shutdown()
-    local.shutdown()
 
 
-def test_router_tries_the_requested_then_the_default_then_bigger_remotes_then_local() -> None:
+def test_a_reply_waits_for_a_starting_server_and_shows_its_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from oca import remotes, router
+
+    seen: list[str] = []
+    spark = _fake_server(seen)
+    port = _free_port()
+    s = Settings(port=port, default="spark", remotes={"spark": SPARK})
+    states = iter(["loading", "loading"])  # what checks answer before it is ready
+    ready: list[bool] = []
+
+    def check(settings: Settings, name: str) -> str | None:
+        state = next(states, None)
+        ready.append(state is None)
+        return state
+
+    def backend(settings: Settings, name: str) -> Backend | None:
+        here = f"http://127.0.0.1:{spark.server_address[1]}"
+        return Backend("spark", here, "m", "", 262144) if any(ready) else None
+
+    monkeypatch.setattr(remotes, "check", check)
+    monkeypatch.setattr(remotes, "start", lambda settings, name: "loading")
+    monkeypatch.setattr(remotes, "backend", backend)
+    monkeypatch.setattr(router, "POLL_S", 0.05)
+    endpoint = ThreadingHTTPServer(("127.0.0.1", port), router.handler(router.Router(s)))
+    threading.Thread(target=endpoint.serve_forever, daemon=True).start()
+    step = {"model": "spark", "stream": True, "messages": [], "tools": [ASK_TOOL]}
+    key = {"Authorization": f"Bearer {agent.api_key()}"}
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    waited = httpx.post(url, json=step, headers=key).text
+    notes = [e["choices"][0]["delta"]["content"] for e in _events(waited)]
+    assert notes == [
+        "↪ oca: spark is starting (loading); this reply waits for it.\n\n",
+        "↪ oca: spark: loading\n\n",
+    ]
+    assert ": oca\n\n" in waited  # keeps OpenCode from giving up meanwhile
+    assert waited.endswith("data: 0\n\ndata: 1\n\ndata: 2\n\n") and len(seen) == 1
+    endpoint.shutdown()
+    spark.shutdown()
+
+
+def test_models_never_see_oca_questions_answers_or_lines() -> None:
     from oca import router
+
+    def call(cid: str, header: str) -> dict[str, Any]:
+        args = {"questions": [{"header": header, "question": "q", "options": []}]}
+        fn = {"name": "question", "arguments": json.dumps(args)}
+        return {"id": cid, "type": "function", "function": fn}
+
+    said = 'User has answered your questions: "q"="Use local". You can now continue.'
+    theirs = "↪ oca: local replies.\n\nDone."
+    turns = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [call("oca_1", "oca: spark is down")]},
+        {"role": "tool", "tool_call_id": "oca_1", "content": said},
+        {"role": "assistant", "content": theirs, "tool_calls": [call("2", "Which database?")]},
+        {"role": "tool", "tool_call_id": "2", "content": said},
+    ]
+    assert router.picked(turns[:3]) == "Use local"
+    assert router.picked(turns) is None  # the model's own question
+    assert router.picked([*turns[:2], {**turns[2], "content": "Error: dismissed"}]) == ""
+    assert router.strip(turns) == [turns[0], {**turns[3], "content": "Done."}, turns[4]]
+    r = router.Router(Settings(remotes={"spark": SPARK}))
+    small = Backend("local", "u", "m", "", 65536)
+    assert r.note("spark", small) == (
+        "local replies while spark is down; it sees only the latest 65k tokens."
+    )
+    assert r.note("spark", small) == ""  # told once
+    assert r.note("spark", Backend("spark", "u", "m", "", 262144)) == "spark answers again."
+
+
+def test_a_down_server_offers_its_restart_then_running_servers_then_others(no_gpu: None) -> None:
+    from oca import remotes
 
     lab = Remote("url", model="m", url="http://lab", context=32768)
     s = Settings(default="spark", remotes={"ucloud": UCLOUD, "spark": SPARK, "lab": lab})
-    r = router.Router(s)
-    assert r.order("lab") == ["lab", "spark", "ucloud", "local"]
-    assert r.order("local") == ["local", "spark", "ucloud", "lab"]
-    spark = Backend("spark", "u", "m", "", 131072)
-    assert r.note("ucloud", spark, 0) == "↪ oca: ucloud is not answering, so spark replies."
-    assert r.note("ucloud", spark, 0) == ""  # told once
-    assert "seeing the latest 131k tokens" in r.note("ucloud", spark, 4)
-    assert r.note("ucloud", Backend("ucloud", "u", "m", "", 262144), 0) == (
-        "↪ oca: ucloud replies again."
+    config.model_path(s.resolved_model).parent.mkdir(parents=True)
+    config.model_path(s.resolved_model).touch()
+    running = {"lab"}.__contains__
+    offered = {c.label: c.description for c in remotes.choices(s, "spark", running)}
+    assert list(offered) == ["Restart spark", "Use lab", "Use local", "Use ucloud"]
+    assert offered["Use lab"] == (
+        "running: m on http://lab, 32k context; sees only the latest 32k tokens"
     )
+    assert offered["Use ucloud"].startswith("starts deepseek-v4.1-flash on UCloud")
+    assert offered["Use ucloud"].endswith("a 2x B200 job, up to 16 GPU-hours")
+    again = remotes.choices(s, "spark", running, failed={"spark", "lab"})
+    assert [c.label for c in again] == ["Use local", "Use ucloud", "Try spark again"]
+    lab_down = [c.label for c in remotes.choices(s, "lab", lambda n: False)]
+    assert lab_down == [
+        "Use local",
+        "Use ucloud",
+        "Use spark",
+        "Try lab again",
+    ]  # ties: config order
+
+
+def test_oca_asks_what_to_do_when_its_server_is_down(
+    monkeypatch: pytest.MonkeyPatch, no_gpu: None
+) -> None:
+    import typer
+
+    from oca import cli, remotes, router
+
+    s = Settings(default="spark", remotes={"spark": SPARK})
+    s.save()
+    config.model_path(s.resolved_model).parent.mkdir(parents=True)
+    config.model_path(s.resolved_model).touch()
+    gone = Down("its server stopped: idle for 60 min")
+    monkeypatch.setattr(install, "is_installed", lambda: True)
+    monkeypatch.setattr(router, "ensure", lambda settings: None)
+    monkeypatch.setattr(remotes, "check", lambda settings, name: (_ for _ in ()).throw(gone))
+    started: list[str] = []
+
+    def start(settings: Settings, name: str, *args: Any) -> None:
+        started.append(name)
+        raise OcaError("cannot reach spark over SSH")
+
+    monkeypatch.setattr(remotes, "start", start)
+    monkeypatch.setattr(cli, "_local", lambda settings, yes: started.append("local"))
+    picks = iter([1, 1])  # Restart spark; it fails, so: Use local
+    monkeypatch.setattr(typer, "prompt", lambda *args, **kwargs: next(picks))
+    assert cli._ready(s) == "local" and started == ["spark", "local"]
+    picks = iter([3])  # Cancel
+    with pytest.raises(typer.Exit):
+        cli._ready(s)
+    monkeypatch.setattr(typer, "confirm", lambda *args, **kwargs: True)
+    assert cli._ready(s, pick=False) == "spark"  # `oca web`: its sessions ask
+    with pytest.raises(OcaError, match="cannot reach"):
+        cli._ready(s, yes=True)
 
 
 def test_a_smaller_server_sees_the_latest_turns_that_fit() -> None:
@@ -411,6 +638,10 @@ def test_a_smaller_server_sees_the_latest_turns_that_fit() -> None:
     long_ask = {"model": "ucloud", "messages": turns, "max_tokens": 100}
     assert router._retarget(long_ask, small, room=262144)[1] == 3  # stands in for ucloud
     assert router._retarget(long_ask, small)[1] == 0  # OpenCode sized it for this server
+    # OpenCode lets the requested server reply with 32k tokens; the stand-in gets a quarter.
+    lab = Backend("lab", "u", "m", "", 32768)
+    body, dropped = router._retarget({**long_ask, "max_tokens": 32768}, lab, room=131072)
+    assert json.loads(body)["max_tokens"] == 8192 and dropped == 0
 
 
 def test_tunnel_binds_localhost_and_pins_host_keys_per_job(tmp_path: Path) -> None:
@@ -581,6 +812,29 @@ def test_ssh_remote_up_tunnels_to_its_server_and_down_stops_it(
     assert remotes.context(s, "spark") == 262144
     assert remotes.down(s, "spark") is True and calls[-1] == "--stop"
     assert remotes.read_conn("spark") is None and remotes.down(s, "spark") is None
+    answer["state"] = "ready"
+    monkeypatch.setattr(remotes, "healthy", lambda b: True)
+    assert remotes.check(s, "spark") is None  # joins a server someone else started
+    assert remotes.read_conn("spark") is not None
+    answer.clear()
+    answer.update(state="stopped", why="idle for 60 min, at 14:02")
+    with pytest.raises(Down, match="its server stopped: idle for 60 min, at 14:02"):
+        remotes.check(s, "spark")
+    assert remotes.read_conn("spark") is None
+
+
+def test_a_stopped_server_says_why(monkeypatch: pytest.MonkeyPatch) -> None:
+    from oca import serve
+
+    monkeypatch.setattr(serve.install, "is_installed", lambda: True)
+    monkeypatch.setattr(serve, "model_path", lambda model: Path("/"))
+    monkeypatch.setattr(serve.server, "start", lambda settings: None)
+    monkeypatch.setattr(serve.server, "stop", lambda: True)
+    monkeypatch.setattr(serve, "_idle", lambda settings, minutes: f"idle for {minutes} min")
+    monkeypatch.setattr(serve.signal, "signal", lambda *args: None)
+    serve.supervise(60)
+    assert serve.status()["state"] == "stopped"
+    assert serve.status()["why"].startswith("idle for 60 min, at ")
 
 
 def test_serve_lists_one_server_that_others_join_but_cannot_change(

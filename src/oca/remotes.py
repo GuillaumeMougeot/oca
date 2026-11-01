@@ -18,7 +18,7 @@ import shlex
 import signal
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -34,6 +34,7 @@ from .config import (
     Remote,
     Settings,
     data_dir,
+    model_path,
     process_alive,
     write_private,
 )
@@ -126,6 +127,53 @@ def label(settings: Settings, name: str) -> str:
     return f"{r.model} on " + {"ucloud": "UCloud", "ssh": r.host, "url": r.url}[r.kind]
 
 
+@dataclass(frozen=True)
+class Choice:
+    """An option while a server is down, such as "Restart spark" or "Use local"."""
+
+    label: str
+    description: str
+
+
+def choices(
+    settings: Settings, down: str, live: Callable[[str], bool], failed: Collection[str] = ()
+) -> list[Choice]:
+    """What to offer while server ``down`` is down: restarting it, then the other servers,
+    running ones and the largest first. What just ``failed`` is only offered again if it is
+    ``down`` itself, last."""
+    size = context(settings, down)
+    running = {n: live(n) for n in settings.servers() if n != down}
+
+    def startable(n: str) -> bool:
+        if n == "local":
+            return model_path(settings.resolved_model).exists()
+        return settings.remotes[n].kind != "url"
+
+    def about(n: str) -> str:
+        ctx = context(settings, n)
+        text = f"{label(settings, n)}, {ctx // 1000}k context"
+        if ctx < size:
+            text += f"; sees only the latest {ctx // 1000}k tokens"
+        r = settings.remotes.get(n)
+        if r and r.kind == "ucloud" and not running.get(n):
+            gpus = CLUSTER_MODELS[r.model].gpus
+            text += f"; a {gpus}x B200 job, up to {gpus * r.hours} GPU-hours"
+        return text
+
+    first = [Choice(f"Restart {down}", about(down))]
+    others = [n for n, up in running.items() if n not in failed and (up or startable(n))]
+    others.sort(key=lambda n: (not running[n], n != "local", -context(settings, n)))
+    again = [Choice(f"Try {down} again", about(down))]
+    use = [
+        Choice(f"Use {n}", ("running: " if running[n] else "starts ") + about(n)) for n in others
+    ]
+    return [
+        *(first if down not in failed and startable(down) else []),
+        *use,
+        *(again if down in failed or not startable(down) else []),
+    ]
+
+
 def backend(settings: Settings, name: str) -> Backend | None:
     """Where requests for remote ``name`` go, if oca is connected to it (health unchecked)."""
     r = settings.remotes[name]
@@ -161,32 +209,80 @@ def healthy(b: Backend) -> bool:
 def check(settings: Settings, name: str) -> str | None:
     """One connection attempt: None when ``name`` answers, else what it is doing.
 
-    Re-opens a tunnel if needed. Raises Down when nothing serves there.
+    Re-opens a tunnel if needed, and joins a server someone else started over SSH. Raises
+    Down, saying why, when nothing serves there.
     """
     r = settings.remotes[name]
     if r.kind == "ucloud":
         job = cluster.read("serve")
         if job is None:
-            raise Down(f"{name}: no server started")
+            raise Down("no server started")
         return cluster.check(r, job)
     if r.kind == "url":
         b = backend(settings, name)
         if b and healthy(b):
             return None
-        raise Down(f"{name}: {r.url} does not answer")
+        raise Down(f"{r.url} does not answer")
     conn = read_conn(name)
-    if conn is None:
-        raise Down(f"{name}: no server started")
     state = serve_call(r, "--status")
     if state["state"] == "stopped":
-        _forget(name, conn)
-        raise Down(f"{name}: its server stopped")
+        if conn:
+            _forget(name, conn)
+        raise Down(f"its server stopped: {state['why']}" if state.get("why") else "not started")
+    if conn is None:
+        conn = Conn(state["model"], state["port"], state["key"], state["context"], state["mine"])
     conn.port, conn.key, conn.context = state["port"], state["key"], state["context"]
     _tunnel(name, r, conn)
     here = Backend(name, f"http://127.0.0.1:{r.port}", conn.model, conn.key, conn.context)
     if state["state"] == "ready" and healthy(here):
         return None
     return str(state["state"])
+
+
+def start(
+    settings: Settings,
+    name: str,
+    confirm: Callable[[str], None] = lambda question: None,
+    say: Callable[[str], None] = lambda text: None,
+) -> str | None:
+    """Start remote ``name``'s server, or join a running one; None once it answers, else
+    what it is doing. ``confirm`` raises to refuse what spends GPU-hours or stops a server.
+    """
+    r = settings.remotes[name]
+    if r.kind == "url":
+        return check(settings, name)
+    if r.kind == "ssh":
+        return up(settings, name)
+    m = CLUSTER_MODELS[r.model]
+    job = cluster.read("serve")
+    if job and cluster.ended(r, job):
+        job = None  # it finished since: start or join a new one
+    if job and job.model != m.id:
+        confirm(f"{'Stop' if job.owner else 'Leave'} {job.model} and switch to {m.id}?")
+        cluster.terminate(r, "serve")
+        job = None
+    if job is None:
+        if key := cluster.unregistered_key():
+            raise OcaError(
+                "UCloud does not know this machine's SSH key, so the tunnel would fail. "
+                f"Register it once: `oca ucloud ssh-keys add {key} --title $(hostname)`"
+            )
+        if shared := cluster.join(r, m):
+            job, starter = shared
+            say(f"Joining {m.id}, started by {starter} (job {job.job_id}).")
+    if job is None:
+        if m.size_gb > 100 and not cluster.weights_ready(r, m):
+            raise OcaError(
+                f"{m.id} ({m.size_gb:g} GB) is not on the drive yet. Run `oca remote pull "
+                f"{name} {m.id}` first, so the download does not spend GPU-hours."
+            )
+        confirm(
+            f"Serve {m.id} on {m.gpus}x B200 for up to {r.hours} h ({m.gpus * r.hours} "
+            f"GPU-hours max, stops after {r.idle} idle min)?"
+        )
+        job = cluster.submit_serve(r, m)
+        say(f"Job {job.job_id} submitted.")
+    return cluster.check(r, job)  # one attempt: it may answer already
 
 
 def up(settings: Settings, name: str) -> str | None:
@@ -227,7 +323,7 @@ def wait_ready(
     if r.kind == "ucloud":
         job = cluster.read("serve")
         if job is None:
-            raise Down(f"{name}: no server started")
+            raise Down("no server started")
         cluster.wait_ready(r, job, on_progress, timeout)
         return
     deadline = time.monotonic() + timeout
