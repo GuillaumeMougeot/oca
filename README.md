@@ -4,13 +4,15 @@ A Claude Code–like coding agent built only from open-source software and open-
 - [OpenCode](https://opencode.ai) as the agent,
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) for a local model,
 - [vLLM](https://github.com/vllm-project/vllm) on [UCloud](https://cloud.sdu.dk) B200s, through [ucloud-api](https://github.com/GuillaumeMougeot/ucloud-api), shared by a project's members,
-- a router that serves OpenCode one model, `oca/auto`, from the best live server, so a session carries on when that changes.
+- any machine you reach over SSH, such as a DGX Spark, set up for you or for all its users,
+- a router that gives OpenCode one model per server and carries a session over to the next server when one stops.
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.sh | sh
-oca            # first run downloads the local model, starts it, opens OpenCode
-oca cluster up # optional: a UCloud B200 server; `oca` switches to it once it answers
-oca web        # OpenCode in a browser, e.g. on a phone
+oca                          # first run asks which servers to use, then opens OpenCode
+oca remote add spark you@spark   # optional: a machine over SSH; or `ucloud`, or a URL
+oca -r spark                 # a session on that server; `oca remote default spark` for all
+oca web                      # OpenCode in a browser, e.g. on a phone
 ```
 
 How to use it: [docs/guide.md](docs/guide.md), also at [guillaumemougeot.github.io/oca](https://guillaumemougeot.github.io/oca/). Status: [ROADMAP.md](ROADMAP.md). Why things are the way they are: [docs/journal](docs/journal/README.md).

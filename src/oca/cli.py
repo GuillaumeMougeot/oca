@@ -603,6 +603,32 @@ def remote_default(name: Annotated[str, typer.Argument(help="A remote, or local.
     console.print(f"Plain `oca` uses {name}.")
 
 
+SETTABLE = ("idle", "hours", "model", "port", "context", "key")
+
+
+@remote_app.command("set")
+def remote_set(
+    name: Annotated[str, typer.Argument()],
+    key: Annotated[str, typer.Argument(help=", ".join(SETTABLE))],
+    value: Annotated[str, typer.Argument()],
+) -> None:
+    """Change a remote's setting, e.g. `oca remote set ucloud idle 30`."""
+    settings = Settings.load()
+    name = _remote(settings, name)
+    r = settings.remotes[name]
+    if key not in SETTABLE:
+        raise OcaError(f"unknown key {key!r}; keys: {', '.join(SETTABLE)}")
+    current = getattr(r, key)
+    try:
+        setattr(r, key, type(current)(value))
+    except ValueError as e:
+        raise OcaError(f"{key} expects {type(current).__name__}, got {value!r}") from e
+    settings.validate()
+    settings.save()
+    agent.write_config(settings)
+    console.print(f"{name} {key} = {getattr(r, key)!r}. Applies to the next server you start.")
+
+
 def _up(settings: Settings, name: str, model: str | None, yes: bool) -> str | None:
     """Start remote ``name``'s server, or join a running one; None once it answers."""
     r = settings.remotes[name]

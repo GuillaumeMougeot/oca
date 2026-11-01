@@ -15,15 +15,16 @@ curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.s
 
 ## Daily use
 
-- **`oca`**, in a project, opens OpenCode. The first run offers to download the local model, 23 GB for CPU.
+- **`oca`**, in a project, opens OpenCode on the default server. The first run asks which servers to use besides this machine, and offers to download the local model, 23 GB for CPU.
+- **`oca -r spark`** opens it on another server; see [Servers](#servers).
 - **`oca run -- run "fix the failing test"`** runs one task without the terminal UI.
 - **`oca web`** opens OpenCode in a browser; see [Phone](#phone-and-other-machines).
 
-OpenCode sees one model, `oca/auto`: the UCloud model while a server answers, else the local model. A session carries on when the model behind it changes, mid-task or when you resume it later.
+OpenCode lists one model per server: `oca/local` and one per remote; `ctrl+x m` switches mid-session. When a session's server stops, the next one that answers replies, and says so in one line: the default server, the other remotes by context window, then this machine. A server with a smaller context window sees only the latest messages; the session keeps its whole history for when its server is back.
 
-**Sessions:** `oca sessions` lists this folder's sessions; `oca sessions --delete <id>` deletes one, and `oca sessions --clear` all those started in this folder or below. `oca -c` reopens the last session, and `oca -s <id>` a given one. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles while a UCloud server answers; the local CPU model skips them, since a title costs 40 to 80 s there.
+**Sessions:** `oca sessions` lists this folder's sessions; `oca sessions --delete <id>` deletes one, and `oca sessions --clear` all those started in this folder or below. `oca -c` reopens the last session, and `oca -s <id>` a given one. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles when a remote answers at launch; the local CPU model skips them, since a title costs 40 to 80 s there.
 
-**Effort:** `ctrl+t` in OpenCode cycles `oca/auto`'s variants: `none`, `low`, `medium`, `high`, `max`. Without a variant, each model uses its default. For one task: `oca run -- run --variant low "…"`.
+**Effort:** `ctrl+t` in OpenCode cycles the model's variants: `none`, `low`, `medium`, `high`, `max`. Without a variant, each model uses its default. For one task: `oca run -- run --variant low "…"`.
 - `none` turns thinking off: fastest, but weakest.
 - Qwen3.8-Flash-Next maps the others to `low`, `medium` and `xhigh` (its default).
 - DeepSeek maps them to a budget of 50, 62, 75 (its default) and 100.
@@ -40,35 +41,49 @@ OpenCode sees one model, `oca/auto`: the UCloud model while a server answers, el
 **Keys:** oca's servers listen on localhost, which every user of the machine can reach, so each one needs a key.
 - The router and the local llama-server take your key, in `~/.config/oca/api-key`; OpenCode sends it for you.
 - Each UCloud server has its own key, kept in its listing on the project drive, where members find it.
-- Files that hold keys are readable only by you.
+- A server on an SSH machine uses the key of the oca installed there; your oca reads it over SSH.
+- Files that hold keys are readable only by you, or by the group of an install for all users.
 
 ## Local model
 
 | Command | Does |
 |---|---|
 | `oca config device cpu`, `gpu` or `auto` | where the local model runs |
-| `oca models` | list local and UCloud models |
+| `oca models` | list llama.cpp models (this machine, SSH remotes) and UCloud models |
 | `oca pull <id>`, then `oca config model <id>` | use another local model |
 | `oca status`, `oca logs -f`, `oca stop` | check, follow or stop the local server |
 
-## UCloud
+## Servers
 
-### Once per person
-
-1. **Log in.** Open cloud.sdu.dk in a browser, then DevTools → Application → Cookies, and copy `refreshToken`. Run `oca ucloud login --project <id>`; `oca ucloud projects` lists your projects.
-2. **Register an SSH key.** Run `oca ucloud ssh-keys add ~/.ssh/id_ed25519.pub --title $(hostname)`, after `ssh-keygen -t ed25519` if you have no key. A server only accepts keys registered before it started.
-3. **Pick the drive.** Run `oca ucloud files drives`, then `oca config cluster_drive /<drive id>`.
-
-Once per project, download the weights: `oca cluster pull [model]`. This runs a CPU job that takes a few minutes and uses no GPU-hours.
-
-### Servers
+Besides this machine (`local`), oca uses remotes: UCloud, a machine you reach over SSH such as a DGX Spark, or any OpenAI-compatible server. `oca remote` lists them, with `*` on the default.
 
 | Command | Does |
 |---|---|
-| `oca cluster up [model]` | join the project's running server of that model, or start one after showing its GPU-hour cap; it returns at once, and `oca` switches to the server once it answers (`--wait` blocks until then) |
-| `oca cluster down` | stop your server, or leave one you joined |
-| `oca cluster status`, `oca cluster logs -f` | state and time left; the job's log |
-| `oca cluster extend 2` | add 2 h; starter only |
+| `oca remote add <name> <target>` | add one: `ucloud`, `you@host`, or a URL |
+| `oca remote up [name] [model]` | start its server, or join a running one; it returns at once, and `oca` switches once it answers (`--wait` blocks) |
+| `oca remote down [name]` | stop your server, or leave one you joined |
+| `oca remote default <name>` | the server plain `oca` uses; `local` is this machine |
+| `oca remote set <name> idle 30` | change a setting: `idle`, `hours`, `model`, `port`, `context` |
+| `oca remote logs [name] -f`, `oca remote remove <name>` | its log; forget it |
+
+When the default server is down, plain `oca` offers to start it.
+
+### A machine over SSH
+
+`oca remote add spark you@spark`, for a DGX Spark for example, needs SSH without a password (`ssh-copy-id you@spark`). It asks whether to install oca there for you only, or for all its users:
+- **For you:** in your home there.
+- **For all users:** in `/opt/oca`, which an admin creates once, for a group all of them are in: `sudo mkdir -p /opt/oca && sudo chgrp <group> /opt/oca && sudo chmod 2775 /opt/oca`. Whoever adds the machine next finds that install and shares its server.
+
+The server runs llama.cpp with `qwen3.6-35b-a3b`, a mixture-of-experts model that stays fast on a Spark's memory; `oca remote up spark <model>` serves another (`oca models` lists them). It stops after `idle` minutes without requests, and only its starter can stop it or change its model.
+
+### UCloud
+
+Once per person:
+1. **Log in.** Open cloud.sdu.dk in a browser, then DevTools → Application → Cookies, and copy `refreshToken`. Run `oca ucloud login --project <id>`; `oca ucloud projects` lists your projects.
+2. **Register an SSH key.** Run `oca ucloud ssh-keys add ~/.ssh/id_ed25519.pub --title $(hostname)`, after `ssh-keygen -t ed25519` if you have no key. A server only accepts keys registered before it started.
+3. **Add it.** `oca remote add ucloud ucloud` lists your drives and asks which one holds the weights and job files.
+
+Once per project, download the weights: `oca remote pull ucloud [model]`. This runs a CPU job that takes a few minutes and uses no GPU-hours. `oca remote up ucloud` shows a server's GPU-hour cap before starting it; `oca remote extend 2` adds 2 h (starter only).
 
 | Model | B200s | Start | Note |
 |---|---|---|---|
@@ -76,18 +91,11 @@ Once per project, download the weights: `oca cluster pull [model]`. This runs a 
 | `deepseek-v4.1-flash` | 2 | about 25 min | stronger; pairs can queue for hours |
 | `qwen3.8-27b-fp8` | 1 | about 5 min | small |
 
-**Switching model:** run `oca cluster up deepseek-v4.1-flash`. It offers to stop or leave the current server. OpenCode works on the local model meanwhile, and moves to the new one once it answers.
+**Switching model:** run `oca remote up ucloud deepseek-v4.1-flash`. It offers to stop or leave the current server. Another server answers meanwhile.
 
-### Cost and timeouts
+**Cost and timeouts:** a server stops after `idle` minutes without requests (default 60), and a job runs at most `hours` (default 8): `oca remote set ucloud idle 30`. Queue time is free. A server shared by several people costs the same as one.
 
-- `cluster_idle`, default 60, is how many minutes without requests a server waits before stopping itself.
-- `cluster_hours`, default 8, caps how long a job can run.
-- Set either with, for example, `oca config cluster_idle 30`. The change applies to the next server you start.
-- Queue time is free. A server shared by several people costs the same as one.
-
-### Sharing
-
-Everyone in the project with the same `cluster_drive` shares servers: `oca cluster up` joins a running server instead of starting another. Project members' SSH keys also give them a shell in the job, so share servers only within a trusted project.
+**Sharing:** everyone in the project using the same drive shares servers: `oca remote up` joins a running server instead of starting another. Project members' SSH keys also give them a shell in the job, so share servers only within a trusted project.
 
 ## Phone and other machines
 
@@ -116,19 +124,19 @@ Then open `http://127.0.0.1:4096` on the phone. `Ctrl+C` closes the tunnel, and 
 | `model` | auto | local model id |
 | `port` | 8080 | oca's endpoint for OpenCode and other tools; llama-server uses the next port |
 | `threads`, `context` | 0 | CPU threads and local context; 0 lets llama.cpp and the model decide |
-| `cluster_drive` | none | UCloud drive for weights and jobs |
-| `cluster_model` | qwen3.8-flash-next | default for `oca cluster up` and `oca cluster pull` |
-| `cluster_hours`, `cluster_idle` | 8, 60 | job cap in hours; idle stop in minutes |
-| `cluster_port` | 8001 | local end of the SSH tunnel |
+| `default` | local | the server plain `oca` uses; `oca remote default <name>` sets it |
+
+Each remote has its own settings: `oca remote set <name> <key> <value>`.
 
 ## Troubleshooting
 
 - **"this endpoint needs oca's key":** an OpenCode session started before the update; restart it with `oca`.
 
 - **"UCloud rejected this machine's SSH key":** register the key (see above). The server then has to be restarted.
-- **Job "in queue":** the B200s are busy. Waiting costs nothing, and `oca cluster down` cancels.
-- **UCloud says SUCCESS but nothing works:** UCloud reports success for failed jobs, so read `oca cluster logs`.
-- **Logs:** `oca logs -f` for the local server, `oca cluster logs` for the job, and `logs/router.log` in the data directory for which model served each request.
+- **Job "in queue":** the B200s are busy. Waiting costs nothing, and `oca remote down` cancels.
+- **UCloud says SUCCESS but nothing works:** UCloud reports success for failed jobs, so read `oca remote logs ucloud`.
+- **"cannot reach … over SSH":** `ssh you@host` must work without a password; `ssh-copy-id you@host` sets that up.
+- **Logs:** `oca logs -f` for the local server, `oca remote logs <name>` for a remote's, and `logs/router.log` in the data directory for which server answered each request.
 
 ## Uninstall
 
