@@ -18,7 +18,11 @@ from typing import Any
 import pytest
 
 from oca import agent, config, install, server
-from oca.config import OcaError, Settings
+from oca.config import OcaError, Remote, Settings
+from oca.remotes import Backend
+
+UCLOUD = Remote("ucloud", model="deepseek-v4.1-flash", port=8001, drive="/9")
+SPARK = Remote("ssh", model="qwen3.6-35b-a3b", port=8002, host="spark", shared="/opt/oca")
 
 
 @pytest.fixture(autouse=True)
@@ -77,26 +81,54 @@ def test_gpu_server_offloads_all(gpu: None) -> None:
     assert env.get("CUDA_VISIBLE_DEVICES") == os.environ.get("CUDA_VISIBLE_DEVICES")
 
 
-def test_opencode_sees_one_model_served_by_the_router(no_gpu: None) -> None:
-    s = Settings(port=8123)
-    remote = config.CLUSTER_MODELS["deepseek-v4.1-flash"]
-    cfg = agent.opencode_config(s, remote)
+def test_opencode_sees_one_model_per_server(no_gpu: None) -> None:
+    lab = Remote("url", model="m", url="http://lab:8000", context=32768)
+    s = Settings(port=8123, default="ucloud", remotes={"ucloud": UCLOUD, "lab": lab})
+    cfg = agent.opencode_config(s, titles=True)
     provider = cfg["provider"][agent.PROVIDER]
     assert provider["options"]["baseURL"] == "http://127.0.0.1:8123/v1"
-    assert cfg["model"] == cfg["small_model"] == f"{agent.PROVIDER}/{agent.MODEL}"
+    assert cfg["model"] == cfg["small_model"] == f"{agent.PROVIDER}/ucloud"  # the default
     assert cfg["enabled_providers"] == [agent.PROVIDER]
-    model = provider["models"][agent.MODEL]
-    assert (
-        remote.id in model["name"]
-        and s.resolved_model.id
-        in agent.opencode_config(s)["provider"][agent.PROVIDER]["models"][agent.MODEL]["name"]
-    )
-    # Sized for the local model, so a session can always fall back to it.
-    assert model["limit"]["context"] == s.resolved_context > model["limit"]["output"]
+    models = provider["models"]
+    assert list(models) == ["local", "ucloud", "lab"]
+    assert "deepseek-v4.1-flash" in models["ucloud"]["name"]
+    assert s.resolved_model.id in models["local"]["name"]
+    # Each server's own window, so OpenCode compacts a session for the one it uses.
+    assert models["lab"]["limit"] == {"context": 32768, "output": 8192}
+    assert models["ucloud"]["limit"]["context"] == config.CLUSTER_MODELS[UCLOUD.model].context
     assert cfg["permission"]["webfetch"] == "ask"
-    assert model["variants"]["max"] == {"reasoningEffort": "max"}
-    assert cfg["agent"]["title"]["variant"] == "none"  # titles on the cluster, no thinking
+    assert models["local"]["variants"]["max"] == {"reasoningEffort": "max"}
+    assert cfg["agent"]["title"] == {"model": "oca/ucloud", "variant": "none"}  # no thinking
     assert agent.opencode_config(s)["agent"]["title"] == {"disable": True}  # not on CPU
+
+
+def test_old_cluster_settings_become_the_default_ucloud_remote() -> None:
+    Settings.path().parent.mkdir(parents=True)
+    Settings.path().write_text(
+        'device = "cpu"\ncluster_drive = "/9"\ncluster_model = "deepseek-v4.1-flash"\n'
+        "cluster_idle = 30\n"
+    )
+    s = Settings.load()
+    assert s.default == "ucloud" and s.device == "cpu"
+    assert s.remotes == {"ucloud": Remote("ucloud", "deepseek-v4.1-flash", 8001, 30, "/9", 8)}
+    s.save()
+    assert "cluster_" not in Settings.path().read_text() and Settings.load() == s
+    Settings.path().write_text('cluster_model = "qwen3.8-27b-fp8"\n')  # no drive: no remote
+    assert Settings.load() == Settings()
+
+
+def test_remote_names_kinds_and_models_are_checked() -> None:
+    bad = [
+        Settings(remotes={"Spark!": SPARK}),
+        Settings(remotes={"local": SPARK}),
+        Settings(remotes={"x": Remote("ssh", model="nope", host="h")}),
+        Settings(remotes={"x": Remote("ftp")}),
+        Settings(default="nope"),
+    ]
+    for s in bad:
+        with pytest.raises(OcaError):
+            s.validate()
+    Settings(default="spark", remotes={"spark": SPARK}).validate()
 
 
 def test_unattended_runs_refuse_instead_of_asking() -> None:
@@ -116,9 +148,10 @@ def test_router_translates_effort_for_each_model() -> None:
     from oca import router
 
     def send(level: str, model: str, efforts: tuple[str | int, ...]) -> dict[str, Any]:
-        body = json.dumps({"model": "auto", "reasoning_effort": level}).encode()
-        out: dict[str, Any] = json.loads(router._retarget(body, model, efforts))
-        assert out["model"] == model and "reasoning_effort" not in out
+        to = Backend("x", "http://x", model, "", 0, efforts)
+        body, dropped = router._retarget({"model": "ucloud", "reasoning_effort": level}, to)
+        out: dict[str, Any] = json.loads(body)
+        assert out["model"] == model and "reasoning_effort" not in out and dropped == 0
         return out.get("chat_template_kwargs", {})
 
     flash = config.CLUSTER_MODELS["qwen3.8-flash-next"].efforts
@@ -184,11 +217,16 @@ def test_install_release_is_atomic_and_rejects_traversal(
 
 
 def test_files_with_keys_are_private_and_logs_rotate(monkeypatch: pytest.MonkeyPatch) -> None:
-    from oca import cluster
+    from oca import cluster, remotes
 
     agent.write_config(Settings())
     cluster._write(cluster.Job("serve", "1", "m", "t", key="k"), "serve")
-    for path in (agent.config_path(), agent.config_path(unattended=True), cluster.state_path()):
+    remotes._save("spark", remotes.Conn("m", 8181, "k", 1, True))
+    Settings(remotes={"lab": Remote("url", model="m", url="http://x", key="k")}).save()
+    for path in (
+        *(agent.config_path(), agent.config_path(unattended=True), cluster.state_path()),
+        *(remotes.conn_path("spark"), Settings.path()),
+    ):
         assert path.stat().st_mode & 0o077 == 0, path
     assert (config.config_dir() / "api-key").stat().st_mode & 0o077 == 0
     monkeypatch.setattr(config, "LOG_LIMIT", 10)
@@ -202,12 +240,11 @@ def test_files_with_keys_are_private_and_logs_rotate(monkeypatch: pytest.MonkeyP
 def test_an_ended_job_is_forgotten_so_up_starts_anew(ucloud: dict[str, Any]) -> None:
     from oca import cluster
 
-    s = Settings(cluster_drive="/9")
     job = cluster.Job("serve", "42", "m", "t")
     cluster._write(job, "serve")
-    assert not cluster.ended(s, job) and cluster.read("serve")
+    assert not cluster.ended(UCLOUD, job) and cluster.read("serve")
     ucloud["state"] = "SUCCESS"
-    assert cluster.ended(s, job) and cluster.read("serve") is None
+    assert cluster.ended(UCLOUD, job) and cluster.read("serve") is None
 
 
 def test_sessions_in_a_folder_exclude_other_folders(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -249,9 +286,9 @@ def test_permissions_allow_work_ask_before_damage_deny_administration() -> None:
 def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:
     from oca import cluster
 
-    s = Settings(cluster_idle=45)
+    r = Remote("ucloud", idle=45)
     for model in config.CLUSTER_MODELS.values():
-        script = cluster.serve_script(model, s, "serve-x")
+        script = cluster.serve_script(model, r, "serve-x")
         path = tmp_path / "serve.sh"
         path.write_text(script)
         assert subprocess.run(["bash", "-n", str(path)]).returncode == 0
@@ -261,7 +298,7 @@ def test_serve_script_is_valid_bash_and_stops_when_idle(tmp_path: Path) -> None:
         assert f"vllm=={config.VLLM_VERSION}" in script
         assert f"rm -f /work/oca/servers/{model.id}.json" in script  # unlisted on exit
         assert "trap unlist EXIT" in script and "export CUDA_HOME=" in script
-        keyed = cluster.serve_script(model, s, "serve-x", "k3y")
+        keyed = cluster.serve_script(model, r, "serve-x", "k3y")
         assert "--api-key k3y" in keyed and "Bearer k3y" in keyed and "--api-key" not in script
 
 
@@ -292,7 +329,7 @@ def _fake_server(seen: list[str]) -> ThreadingHTTPServer:
     return httpd
 
 
-def test_router_uses_the_cluster_while_it_answers_then_falls_back_mid_session(
+def test_router_uses_a_server_while_it_answers_then_the_next_one_and_says_so(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import httpx
@@ -305,7 +342,10 @@ def test_router_uses_the_cluster_while_it_answers_then_falls_back_mid_session(
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    s = Settings(port=port, cluster_port=remote.server_address[1])
+    ucloud = Remote("ucloud", model="deepseek-v4.1-flash", port=remote.server_address[1])
+    s = Settings(port=port, default="ucloud", remotes={"ucloud": ucloud})
+    config.model_path(s.resolved_model).parent.mkdir(parents=True)
+    config.model_path(s.resolved_model).touch()  # the local model is there to fall back to
     job = cluster.Job("serve", "1", "deepseek-v4.1-flash", "t", key="job-key")
     monkeypatch.setattr(cluster, "read", lambda kind: job)
     monkeypatch.setattr(server, "start", lambda settings: None)
@@ -313,17 +353,60 @@ def test_router_uses_the_cluster_while_it_answers_then_falls_back_mid_session(
     endpoint = ThreadingHTTPServer(("127.0.0.1", port), router.handler(router.Router(s)))
     threading.Thread(target=endpoint.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
-    ask = {"model": "auto", "stream": True, "messages": []}
-    assert httpx.post(url, json=ask).status_code == 401  # another user of this machine
+    step = {"model": "ucloud", "stream": True, "messages": [], "tools": []}
+    assert httpx.post(url, json=step).status_code == 401  # another user of this machine
     key = {"Authorization": f"Bearer {agent.api_key()}"}
-    assert httpx.post(url, json=ask, headers=key).text == "data: 0\n\ndata: 1\n\ndata: 2\n\n"
+    assert httpx.post(url, json=step, headers=key).text == "data: 0\n\ndata: 1\n\ndata: 2\n\n"
+    old = {"model": "auto", "stream": True, "messages": []}  # a session from before remotes
+    assert httpx.post(url, json=old, headers=key).text.startswith("data: 0")
     remote.shutdown()
-    remote.server_close()  # the cluster stops; the next request must not fail
-    assert httpx.post(url, json=ask, headers=key).text.startswith("data: 0")
-    assert remote_seen == ["deepseek-v4.1-flash Bearer job-key"]  # each server gets its key
-    assert local_seen == [f"{s.resolved_model.id} Bearer {agent.api_key()}"]
+    remote.server_close()  # the server stops mid-session; the next request must not fail
+    moved = httpx.post(url, json=step, headers=key).text
+    note, rest = moved.split("\n\n", 1)
+    assert "ucloud is not answering, so local replies" in note and rest.startswith("data: 0")
+    assert httpx.post(url, json=step, headers=key).text.startswith("data: 0")  # said once
+    assert remote_seen == ["deepseek-v4.1-flash Bearer job-key"] * 2  # each server, its key
+    assert local_seen == [f"{s.resolved_model.id} Bearer {agent.api_key()}"] * 2
     endpoint.shutdown()
     local.shutdown()
+
+
+def test_router_tries_the_requested_then_the_default_then_bigger_remotes_then_local() -> None:
+    from oca import router
+
+    lab = Remote("url", model="m", url="http://lab", context=32768)
+    s = Settings(default="spark", remotes={"ucloud": UCLOUD, "spark": SPARK, "lab": lab})
+    r = router.Router(s)
+    assert r.order("lab") == ["lab", "spark", "ucloud", "local"]
+    assert r.order("local") == ["local", "spark", "ucloud", "lab"]
+    spark = Backend("spark", "u", "m", "", 131072)
+    assert r.note("ucloud", spark, 0) == "↪ oca: ucloud is not answering, so spark replies."
+    assert r.note("ucloud", spark, 0) == ""  # told once
+    assert "seeing the latest 131k tokens" in r.note("ucloud", spark, 4)
+    assert r.note("ucloud", Backend("ucloud", "u", "m", "", 262144), 0) == (
+        "↪ oca: ucloud replies again."
+    )
+
+
+def test_a_smaller_server_sees_the_latest_turns_that_fit() -> None:
+    from oca import router
+
+    turns = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "old " + "x" * 3000},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+        {"role": "tool", "tool_call_id": "1", "content": "y" * 600},
+        {"role": "user", "content": [{"type": "text", "text": "now"}]},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "go on"},
+    ]
+    assert router.fit(turns, 10**6) == (turns, 0)
+    kept, dropped = router.fit(turns, 200)
+    assert dropped == 3 and kept[0] == turns[0] and kept[2:] == turns[5:]
+    assert kept[1]["content"][0]["text"].startswith("[oca: the 3 earlier messages")
+    assert kept[1]["content"][1:] == turns[4]["content"]  # starts at a user turn, untouched
+    kept, dropped = router.fit(turns, 1)  # nothing fits: still the last user turn
+    assert dropped == 5 and kept[-1]["content"].endswith("go on")
 
 
 def test_tunnel_binds_localhost_and_pins_host_keys_per_job(tmp_path: Path) -> None:
@@ -384,7 +467,7 @@ def test_members_join_a_listed_server_and_leaving_does_not_stop_it(
 ) -> None:
     from oca import cluster
 
-    s, model = Settings(cluster_drive="/9"), config.CLUSTER_MODELS["deepseek-v4.1-flash"]
+    s, model = UCLOUD, config.CLUSTER_MODELS["deepseek-v4.1-flash"]
     started = cluster.Job("serve", "42", model.id, "serve-x", endpoint="ucloud@h:2211", key="k")
     cluster.publish(s, started)  # the starter's machine lists it
     joined = cluster.join(s, model)  # another member's machine
@@ -400,11 +483,10 @@ def test_members_join_a_listed_server_and_leaving_does_not_stop_it(
 def test_starter_stops_and_unlists_its_server(ucloud: dict[str, Any]) -> None:
     from oca import cluster
 
-    s = Settings(cluster_drive="/9")
     job = cluster.Job("serve", "42", "deepseek-v4.1-flash", "serve-x", endpoint="u@h:1")
-    cluster.publish(s, job)
+    cluster.publish(UCLOUD, job)
     cluster._write(job, "serve")
-    assert cluster.terminate(s, "serve")
+    assert cluster.terminate(UCLOUD, "serve")
     assert ucloud["terminated"] == ["42"] and ucloud["files"] == {}
 
 
@@ -417,11 +499,11 @@ def test_waiting_for_the_server_does_not_count_queue_time(
     states = iter(["in queue"] * 3 + [None])
     monkeypatch.setattr(cluster, "check", lambda s, j: next(states))
     monkeypatch.setattr(cluster.time, "sleep", lambda s: None)
-    cluster.wait_ready(Settings(), job, lambda doing: None, timeout=0)  # queued: no timeout
+    cluster.wait_ready(UCLOUD, job, lambda doing: None, timeout=0)  # queued: no timeout
     loading = iter(["loading"] * 3)
     monkeypatch.setattr(cluster, "check", lambda s, j: next(loading))
     with pytest.raises(OcaError, match="not ready"):
-        cluster.wait_ready(Settings(), job, lambda doing: None, timeout=0)
+        cluster.wait_ready(UCLOUD, job, lambda doing: None, timeout=0)
 
 
 def test_web_password_is_made_once_and_private() -> None:
@@ -441,3 +523,90 @@ def test_uninstall_only_deletes_what_oca_created(tmp_path: Path) -> None:
     assert not (data / "bin").exists() and not Settings.path().exists()
     install.remove(install.owned_paths())
     assert not (data / "models").exists() and (data / "unrelated" / "keep.txt").exists()
+
+
+def test_ssh_remote_probe_and_serve_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from oca import remotes
+
+    sent: list[str] = []
+    out = {"text": "aarch64\n@shared\nNVIDIA GB10, [N/A]\n", "code": 0}
+
+    def ssh(host: str, command: str, timeout: float = 0) -> subprocess.CompletedProcess[str]:
+        sent.append(command)
+        return subprocess.CompletedProcess([], out["code"], stdout=out["text"], stderr="")
+
+    monkeypatch.setattr(remotes, "ssh", ssh)
+    found = remotes.probe("spark")
+    assert (found.arch, found.gpu, found.shared, found.personal) == (
+        "aarch64",
+        "NVIDIA GB10, [N/A]",
+        True,
+        False,
+    )
+    out["text"] = 'a warning\n{"state": "ready", "port": 8181}\n'
+    assert remotes.serve_call(SPARK, "--status")["port"] == 8181
+    assert "OCA_SHARED=1" in sent[-1] and "/opt/oca/bin/oca serve --status" in sent[-1]
+    personal = Remote("ssh", model="qwen3.6-35b-a3b", host="spark")
+    remotes.serve_call(personal, "--status")
+    assert sent[-1].startswith('"$HOME/.local/bin/oca" serve') and "OCA_SHARED" not in sent[-1]
+    out["text"] = '{"error": "this machine serves qwen3.8-27b for bob"}'
+    with pytest.raises(OcaError, match=r"serves qwen3\.8-27b for bob"):
+        remotes.serve_call(SPARK, "")
+    out.update(text="", code=127)
+    with pytest.raises(OcaError, match="failed"):
+        remotes.serve_call(SPARK, "")
+
+
+def test_ssh_remote_up_tunnels_to_its_server_and_down_stops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oca import cluster, remotes
+
+    calls: list[str] = []
+    tunnels: list[list[str]] = []
+    answer = {"state": "loading", "model": "qwen3.6-35b-a3b", "port": 8181, "key": "k"}
+    answer |= {"context": 262144, "mine": True}
+    monkeypatch.setattr(remotes, "serve_call", lambda r, args: calls.append(args) or answer)
+    monkeypatch.setattr(cluster, "open_tunnel", lambda cmd, port, log: tunnels.append(cmd) or 42)
+    s = Settings(remotes={"spark": SPARK})
+    assert remotes.up(s, "spark") == "loading"
+    assert "127.0.0.1:8002:127.0.0.1:8181" in tunnels[-1] and tunnels[-1][-1] == "spark"
+    assert remotes.backend(s, "spark") == Backend(
+        "spark", "http://127.0.0.1:8002", "qwen3.6-35b-a3b", "k", 262144
+    )
+    assert remotes.context(s, "spark") == 262144
+    assert remotes.down(s, "spark") is True and calls[-1] == "--stop"
+    assert remotes.read_conn("spark") is None and remotes.down(s, "spark") is None
+
+
+def test_serve_lists_one_server_that_others_join_but_cannot_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oca import serve
+
+    spawned: list[list[str]] = []
+
+    class Supervisor:
+        pid = 777
+
+        def __init__(self, cmd: list[str], **kwargs: Any) -> None:
+            spawned.append(cmd)
+            serve._set(pid=self.pid, state="starting")  # what the real one does first
+
+        def poll(self) -> None:
+            return None
+
+    monkeypatch.setattr(serve.subprocess, "Popen", Supervisor)
+    monkeypatch.setattr(serve, "process_alive", lambda pid, name: pid == 777)
+    monkeypatch.setattr(serve.getpass, "getuser", lambda: "alice")
+    first = serve.start("qwen3.6-35b-a3b", 30)
+    assert first["state"] == "starting" and first["mine"] and first["port"] == 8081
+    assert first["key"] == agent.api_key() and spawned[-1][-1] == "30"
+    assert Settings.load().model == "qwen3.6-35b-a3b"
+    assert serve.start(None, 30) == first and len(spawned) == 1  # joined, not restarted
+    monkeypatch.setattr(serve.getpass, "getuser", lambda: "bob")
+    assert serve.status()["mine"] is False
+    with pytest.raises(OcaError, match=r"serves qwen3\.6-35b-a3b for alice"):
+        serve.start("qwen3.8-27b", 30)
+    with pytest.raises(OcaError, match="only alice"):
+        serve.stop()

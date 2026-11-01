@@ -5,13 +5,14 @@ from __future__ import annotations
 import getpass
 import os
 import platform
+import re
 import secrets
 import shutil
 import subprocess
 import tomllib
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import tomli_w
 from platformdirs import user_config_path, user_data_path
@@ -25,6 +26,10 @@ DEVICES = ("auto", "cpu", "gpu")
 
 class OcaError(Exception):
     """A user-facing failure; the CLI prints it without a traceback."""
+
+
+class Down(OcaError):
+    """Nothing serves on that remote: `oca remote up` starts it."""
 
 
 @dataclass(frozen=True)
@@ -179,13 +184,20 @@ def model_path(model: Model) -> Path:
     return data_dir() / "models" / model.repo / model.file
 
 
+def shared() -> bool:
+    """True for an install that serves all users of a machine (OCA_SHARED=1, set by remotes)."""
+    return os.environ.get("OCA_SHARED") == "1"
+
+
 def write_private(path: Path, text: str) -> None:
-    """Write ``text`` readable by this user only: oca's configs and state hold keys."""
+    """Write ``text`` for this user only, or for the folder's group on a shared install:
+    oca's configs and state hold keys."""
+    mode = 0o660 if shared() else 0o600
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     with os.fdopen(fd, "w") as fh:
         fh.write(text)
-    path.chmod(0o600)  # in case it existed with wider permissions
+    path.chmod(mode)  # in case it existed with other permissions
 
 
 def secret_path(name: str) -> Path:
@@ -233,6 +245,45 @@ def process_alive(pid: int, name: str) -> bool:
     return name in out.stdout
 
 
+KINDS = ("ucloud", "ssh", "url")
+NAME = re.compile(r"[a-z0-9][a-z0-9-]*")  # remote names: OpenCode model ids and file names
+
+
+@dataclass
+class Remote:
+    """A server on another machine, saved as ``[remotes.<name>]``; which fields apply
+    depends on its kind."""
+
+    kind: str  # "ucloud", "ssh" or "url"
+    model: str = ""  # ucloud: a CLUSTER_MODELS id; ssh: a MODELS id; url: the server's id
+    port: int = 0  # local end of the SSH tunnel (ucloud, ssh)
+    idle: int = 60  # minutes without requests before a server oca started stops itself
+    drive: str = ""  # ucloud: drive for weights and job files, e.g. "/1234567"
+    hours: int = 8  # ucloud: job time allocation
+    host: str = ""  # ssh: user@host or an ~/.ssh/config alias
+    shared: str = ""  # ssh: folder of the install for all its users; "" for your own
+    url: str = ""  # url: base URL of an OpenAI-compatible server
+    key: str = ""  # url: its API key
+    context: int = 0  # url: its context window
+
+
+def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
+    """Settings from before remotes (v0.2): the cluster_* keys become the remote "ucloud",
+    which plain `oca` used whenever it answered, so it becomes the default."""
+    old = {k: raw.pop(k) for k in list(raw) if k.startswith("cluster_")}
+    if old.get("cluster_drive") and "ucloud" not in raw.get("remotes", {}):
+        raw.setdefault("remotes", {})["ucloud"] = {
+            "kind": "ucloud",
+            "drive": old["cluster_drive"],
+            "model": old.get("cluster_model", "qwen3.8-flash-next"),
+            "hours": old.get("cluster_hours", 8),
+            "idle": old.get("cluster_idle", 60),
+            "port": old.get("cluster_port", 8001),
+        }
+        raw.setdefault("default", "ucloud")
+    return raw
+
+
 @dataclass
 class Settings:
     device: str = "auto"
@@ -240,11 +291,11 @@ class Settings:
     port: int = 8080
     threads: int = 0  # 0: llama.cpp picks
     context: int = 0  # 0: the model's default
-    cluster_drive: str = ""  # UCloud drive for weights and job files, e.g. "/1234567"
-    cluster_model: str = "qwen3.8-flash-next"  # 1 B200: starts within minutes
-    cluster_hours: int = 8  # job time allocation
-    cluster_idle: int = 60  # minutes without requests before the job stops itself
-    cluster_port: int = 8001  # local end of the SSH tunnel
+    default: str = "local"  # the server plain `oca` uses: "local" or a remote's name
+    remotes: dict[str, Remote] = field(default_factory=dict)
+
+    def servers(self) -> list[str]:
+        return ["local", *self.remotes]
 
     @property
     def resolved_device(self) -> str:
@@ -265,11 +316,20 @@ class Settings:
             raise OcaError(f"device must be one of {', '.join(DEVICES)}, got {self.device!r}")
         if self.model != "auto" and self.model not in MODELS:
             raise OcaError(f"unknown model {self.model!r}; see `oca models`")
-        if self.cluster_model not in CLUSTER_MODELS:
-            raise OcaError(f"unknown cluster model {self.cluster_model!r}; see `oca models`")
+        for name, r in self.remotes.items():
+            if name == "local" or not NAME.fullmatch(name):
+                raise OcaError(f"remote name {name!r}: use lowercase letters, digits and dashes")
+            if r.kind not in KINDS:
+                raise OcaError(f"remote {name}: kind must be one of {', '.join(KINDS)}")
+            if r.kind == "ucloud" and r.model not in CLUSTER_MODELS:
+                raise OcaError(f"remote {name}: unknown model {r.model!r}; see `oca models`")
+            if r.kind == "ssh" and r.model not in MODELS:
+                raise OcaError(f"remote {name}: unknown model {r.model!r}; see `oca models`")
+        if self.default not in self.servers():
+            raise OcaError(f"unknown server {self.default!r}; see `oca remote`")
 
     def set(self, key: str, value: str) -> None:
-        names = {f.name for f in fields(self)}
+        names = {f.name for f in fields(self)} - {"remotes"}  # `oca remote` manages those
         if key not in names:
             raise OcaError(f"unknown key {key!r}; keys: {', '.join(sorted(names))}")
         current = getattr(self, key)
@@ -286,13 +346,24 @@ class Settings:
     @classmethod
     def load(cls) -> Settings:
         path = cls.path()
-        raw = tomllib.loads(path.read_text()) if path.exists() else {}
-        names = {f.name for f in fields(cls)}
-        settings = cls(**{k: v for k, v in raw.items() if k in names})
+        raw = _migrate(tomllib.loads(path.read_text()) if path.exists() else {})
+        names = {f.name for f in fields(cls)} - {"remotes"}
+        known = {f.name for f in fields(Remote)}
+        remotes = {
+            name: Remote(**{k: v for k, v in r.items() if k in known})
+            for name, r in raw.get("remotes", {}).items()
+        }
+        settings = cls(**{k: v for k, v in raw.items() if k in names}, remotes=remotes)
         settings.validate()
         return settings
 
     def save(self) -> None:
-        path = self.path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(tomli_w.dumps(asdict(self)))
+        data = asdict(self)
+        blank = asdict(Remote(kind=""))
+        data["remotes"] = {  # only what differs from the defaults, so the file stays readable
+            name: {k: v for k, v in asdict(r).items() if k == "kind" or v != blank[k]}
+            for name, r in self.remotes.items()
+        }
+        if not data["remotes"]:
+            del data["remotes"]
+        write_private(self.path(), tomli_w.dumps(data))  # a url remote's key may be in it

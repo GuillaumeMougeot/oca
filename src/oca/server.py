@@ -58,6 +58,7 @@ def command(settings: Settings, exe: Path) -> list[str]:
         "--ctx-size", str(settings.resolved_context),
         "--n-gpu-layers", "999" if gpu else "0",
         "--jinja",
+        "--metrics",  # request counters, for `oca serve`'s idle stop
         *model.args,
     ]  # fmt: skip
     if settings.threads:

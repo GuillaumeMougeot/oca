@@ -1,9 +1,11 @@
-"""oca's endpoint: one stable model for OpenCode, served by the best live server.
+"""oca's endpoint: one OpenCode model per server, each served by the best live server.
 
-OpenCode talks to ``127.0.0.1:<port>`` and sees a single model, ``oca/auto``. Each
-request goes to the UCloud server while it answers, else to the local llama-server,
-which starts on demand. So a session resumes, and a task carries on, whichever server
-is up. A background check re-opens the tunnel once a queued or restarted job runs.
+OpenCode talks to ``127.0.0.1:<port>`` and sees a model per server, ``local`` and each
+remote. A request goes to its server while that answers, else to the next that does: the
+default server, the other remotes by context window, then this machine's llama-server,
+which starts on demand. The reply then says so in one line, and a smaller server sees
+only the latest messages that fit. So a session carries on whichever server is up. A
+background check re-opens tunnels once a queued or restarted server runs.
 """
 
 from __future__ import annotations
@@ -19,36 +21,22 @@ import sys
 import threading
 import time
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import version
 from pathlib import Path
+from typing import Any
 
 import httpx
 
-from . import agent, cluster, server
-from .config import (
-    CLUSTER_MODELS,
-    EFFORTS,
-    OcaError,
-    Settings,
-    data_dir,
-    open_log,
-    process_alive,
-)
+from . import agent, remotes, server
+from .config import EFFORTS, OcaError, Settings, data_dir, model_path, open_log, process_alive
+from .remotes import Backend
 
-CHECK_S = 5  # a cluster health check stays valid this long
-SUPERVISE_S = 60  # how often a down cluster is checked again (job state, tunnel)
+CHECK_S = 5  # a remote's health check stays valid this long
+SUPERVISE_S = 60  # how often a down remote is checked again (job state, tunnel)
 HOP = {"connection", "keep-alive", "transfer-encoding"}  # not forwarded to OpenCode
-
-
-@dataclass(frozen=True)
-class Backend:
-    url: str
-    model: str
-    remote: bool  # the UCloud server, not the local one
-    key: str  # what the server wants as a bearer token; "" for none
-    efforts: tuple[str | int, ...] = ()
+CHARS_PER_TOKEN = 3  # low for code and JSON, so token counts come out high: a safe margin
 
 
 class Router:
@@ -56,48 +44,127 @@ class Router:
         self.settings = settings
         self.key = agent.api_key()  # what OpenCode must send
         self._start = threading.Lock()  # one local server start at a time
-        self._seen: float = -CHECK_S
-        self._remote: cluster.Job | None = None
+        self._seen: dict[str, tuple[float, Backend | None]] = {}
+        self._told: dict[str, tuple[str, bool]] = {}  # per requested server: who replied, trimmed
 
-    def remote(self) -> cluster.Job | None:
-        """The cluster job while its server answers."""
-        if time.monotonic() - self._seen > CHECK_S:
-            job = cluster.read("serve")
-            self._remote = job if job and cluster.healthy(self.settings) else None
-            self._seen = time.monotonic()
-        return self._remote
+    def order(self, requested: str) -> list[str]:
+        """Servers to try for ``requested``: it, the default, other remotes by context, local."""
+        s = self.settings
+        others = sorted(s.remotes, key=lambda name: -remotes.context(s, name))
+        return list(dict.fromkeys([requested, s.default, *others, "local"]))
 
-    def forget_remote(self) -> None:
-        self._remote, self._seen = None, time.monotonic()
+    def remote(self, name: str) -> Backend | None:
+        """Remote ``name`` while it answers."""
+        at, found = self._seen.get(name, (-CHECK_S, None))
+        if time.monotonic() - at > CHECK_S:
+            found = remotes.backend(self.settings, name)
+            found = found if found and remotes.healthy(found) else None
+            self._seen[name] = (time.monotonic(), found)
+        return found
 
-    def backend(self) -> Backend:
-        """Where the next request goes: the cluster while it answers, else the local server."""
-        if job := self.remote():
-            efforts = CLUSTER_MODELS[job.model].efforts if job.model in CLUSTER_MODELS else ()
-            url = f"http://127.0.0.1:{self.settings.cluster_port}"
-            return Backend(url, job.model, True, job.key, efforts)
+    def forget(self, name: str) -> None:
+        self._seen[name] = (time.monotonic(), None)
+
+    def local(self) -> Backend | None:
+        """This machine's llama-server, started on demand; None without a downloaded model."""
+        model = self.settings.resolved_model
+        if not model_path(model).exists():
+            return None
         with self._start:
             server.start(self.settings)
         url = f"http://127.0.0.1:{server.port(self.settings)}"
-        return Backend(url, self.settings.resolved_model.id, False, self.key)
+        return Backend("local", url, model.id, self.key, self.settings.resolved_context)
+
+    def backend(self, requested: str, skip: set[str]) -> Backend:
+        """The first server in ``order(requested)`` that answers."""
+        for name in self.order(requested):
+            found = None if name in skip else self.local() if name == "local" else self.remote(name)
+            if found:
+                return found
+        raise OcaError("no server answers; start one with `oca remote up` or `oca start`")
+
+    def note(self, requested: str, to: Backend, dropped: int) -> str:
+        """A line for the reply when who replies to ``requested`` changed since the last one."""
+        now, before = (to.name, dropped > 0), self._told.get(requested, (requested, False))
+        self._told[requested] = now
+        if now == before:
+            return ""
+        if now == (requested, False):
+            return f"↪ oca: {requested} replies again."
+        said = [] if to.name == requested else [f"{requested} is not answering"]
+        size = f"{to.context // 1000}k tokens"
+        said.append(f"{to.name} replies" + (f", seeing the latest {size}" if dropped else ""))
+        return f"↪ oca: {', so '.join(said)}."
 
 
-def _retarget(body: bytes, model: str, efforts: tuple[str | int, ...]) -> bytes:
-    """The request body for the backend: its model id, and oca's effort in its own terms."""
-    with suppress(ValueError):
-        payload = json.loads(body)
-        if isinstance(payload, dict) and "model" in payload:
-            payload["model"] = model
-            level = payload.pop("reasoning_effort", None)
-            kwargs = payload.get("chat_template_kwargs") or {}
-            if level == "none":
-                kwargs["enable_thinking"] = False  # Qwen templates and DeepSeek's encoder
-            elif efforts and level in EFFORTS:
-                kwargs["reasoning_effort"] = efforts[EFFORTS.index(level) - 1]
-            if kwargs:
-                payload["chat_template_kwargs"] = kwargs
-            return json.dumps(payload).encode()
-    return body
+def fit(messages: list[Any], budget: int) -> tuple[list[Any], int]:
+    """The latest ``messages`` that fit ``budget`` tokens; how many were left out.
+
+    The system messages stay, and the kept part starts at a user message, so no tool result
+    loses its call. Its first message says that earlier ones were left out.
+    """
+
+    def size(m: Any) -> int:
+        return len(json.dumps(m)) // CHARS_PER_TOKEN
+
+    head = 0
+    while head < len(messages) and isinstance(messages[head], dict):
+        if messages[head].get("role") != "system":
+            break
+        head += 1
+    rest = messages[head:]
+    room = budget - sum(size(m) for m in messages[:head])
+    users = [i for i, m in enumerate(rest) if isinstance(m, dict) and m.get("role") == "user"]
+    total, cut = sum(size(m) for m in rest), 0
+    while total > room and users and cut < users[-1]:
+        total -= size(rest[cut])
+        cut += 1
+    while cut and cut < len(rest) and rest[cut].get("role") != "user":
+        total -= size(rest[cut])
+        cut += 1
+    if not cut:
+        return messages, 0
+    first = dict(rest[cut])
+    note = f"[oca: the {cut} earlier messages of this session were left out to fit this model.]"
+    content = first.get("content")
+    if isinstance(content, list):
+        first["content"] = [{"type": "text", "text": note}, *content]
+    else:
+        first["content"] = f"{note}\n\n{content or ''}"
+    return [*messages[:head], first, *rest[cut + 1 :]], cut
+
+
+def _retarget(payload: dict[str, Any], to: Backend) -> tuple[bytes, int]:
+    """The request for ``to``: its model id, oca's effort in its own terms, and the latest
+    messages that fit its context. Returns the body and how many messages were left out."""
+    payload = {**payload, "model": to.model}
+    level = payload.pop("reasoning_effort", None)
+    kwargs = payload.get("chat_template_kwargs") or {}
+    if level == "none":
+        kwargs["enable_thinking"] = False  # Qwen templates and DeepSeek's encoder
+    elif to.efforts and level in EFFORTS:
+        kwargs["reasoning_effort"] = to.efforts[EFFORTS.index(level) - 1]
+    if kwargs:
+        payload["chat_template_kwargs"] = kwargs
+    dropped = 0
+    if to.context and isinstance(payload.get("messages"), list):
+        reply = int(payload.get("max_tokens") or payload.get("max_completion_tokens") or 0)
+        budget = to.context - (reply or to.context // 4)
+        payload["messages"], dropped = fit(payload["messages"], budget)
+    return json.dumps(payload).encode(), dropped
+
+
+def _chunk(model: str, text: str) -> bytes:
+    """``text`` as the first event of a streamed reply."""
+    delta = {"role": "assistant", "content": f"{text}\n\n"}
+    event = {
+        "id": "oca-note",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+    }
+    return f"data: {json.dumps(event)}\n\n".encode()
 
 
 def handler(router: Router) -> type[BaseHTTPRequestHandler]:
@@ -112,11 +179,23 @@ def handler(router: Router) -> type[BaseHTTPRequestHandler]:
             given = self.headers.get("Authorization", "").encode()
             if not hmac.compare_digest(given, f"Bearer {router.key}".encode()):
                 return self._error(401, "this endpoint needs oca's key, as in its OpenCode config")
-            for retry in (False, True):
+            payload: Any = None
+            with suppress(ValueError):
+                payload = json.loads(body) if body else None
+            if not isinstance(payload, dict):
+                payload = None
+            asked = payload.get("model") if payload else None
+            servers = router.settings.servers()
+            requested = asked if asked in servers else router.settings.default  # "auto": v0.2
+            skip: set[str] = set()
+            while True:
                 try:
-                    to = router.backend()
+                    to = router.backend(requested, skip)
                 except OcaError as e:
                     return self._error(503, f"no model is up: {e}")
+                content, dropped = _retarget(payload, to) if payload else (body, 0)
+                # Agent steps carry tools; title and summary requests get no note.
+                note = router.note(requested, to, dropped) if payload and "tools" in payload else ""
                 headers = {
                     "Content-Type": self.headers.get("Content-Type", "application/json"),
                     "Accept": self.headers.get("Accept", "*/*"),
@@ -126,25 +205,30 @@ def handler(router: Router) -> type[BaseHTTPRequestHandler]:
                 url, timeout = to.url + self.path, httpx.Timeout(None, connect=3)
                 try:
                     stream = httpx.stream(
-                        self.command, url, content=_retarget(body, to.model, to.efforts),
-                        headers=headers, timeout=timeout,
-                    )  # fmt: skip
+                        self.command, url, content=content, headers=headers, timeout=timeout
+                    )
                     with stream as r:
-                        sys.stderr.write(f"{time.strftime('%X')} {self.path} -> {to.model}\n")
+                        line = f"{time.strftime('%X')} {self.path} {requested} -> {to.model}\n"
+                        sys.stderr.write(line)
                         self.send_response(r.status_code)
                         for k, v in r.headers.items():
                             if k.lower() not in HOP:
                                 self.send_header(k, v)
                         self.end_headers()
                         with suppress(BrokenPipeError, ConnectionResetError, httpx.ReadError):
+                            if note and r.headers.get("content-type", "").startswith(
+                                "text/event-stream"
+                            ):
+                                self.wfile.write(_chunk(to.model, note))
                             for chunk in r.iter_raw():  # tokens stream through as they come
                                 self.wfile.write(chunk)
                                 self.wfile.flush()
                     return
                 except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-                    if not to.remote or retry:
+                    if to.name == "local":
                         return self._error(503, f"{to.model} unreachable: {e}")
-                    router.forget_remote()  # the cluster went away mid-session: go local
+                    router.forget(to.name)  # it went away mid-session: try the next server
+                    skip.add(to.name)
 
         def _error(self, status: int, message: str) -> None:
             data = json.dumps({"error": {"message": f"oca: {message}"}}).encode()
@@ -161,13 +245,13 @@ def handler(router: Router) -> type[BaseHTTPRequestHandler]:
 
 
 def supervise(router: Router) -> None:
-    """Re-open the tunnel when a queued or restarted job runs; forget jobs that ended."""
+    """Re-open tunnels when a queued or restarted server runs; forget servers that ended."""
     while True:
         time.sleep(SUPERVISE_S)
-        job = cluster.read("serve")
-        if job and router.remote() is None:
-            with suppress(Exception):  # UCloud or SSH hiccups: try again next round
-                cluster.check(router.settings, job)
+        for name, r in router.settings.remotes.items():
+            if r.kind != "url" and router.remote(name) is None:
+                with suppress(Exception):  # UCloud or SSH hiccups: try again next round
+                    remotes.check(router.settings, name)
 
 
 def serve(settings: Settings) -> None:

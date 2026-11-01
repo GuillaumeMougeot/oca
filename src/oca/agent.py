@@ -8,11 +8,10 @@ import subprocess
 from pathlib import Path
 from typing import Any, NoReturn
 
-from . import install
-from .config import EFFORTS, ClusterModel, OcaError, Settings, config_dir, secret, write_private
+from . import install, remotes
+from .config import EFFORTS, OcaError, Settings, config_dir, secret, write_private
 
-PROVIDER = "oca"
-MODEL = "auto"  # oca's router serves it with the best live server
+PROVIDER = "oca"  # its models are oca's servers: "local" and each remote
 
 # Like Claude Code's auto mode: work freely in the project; ask before deleting, rewriting
 # git history, reaching other machines or installing outside the project; never administer
@@ -68,42 +67,40 @@ def _refuse_asks(rules: Any) -> Any:
     return "deny" if rules == "ask" else rules
 
 
-def _provider(name: str, port: int, model_id: str, label: str, context: int) -> dict[str, Any]:
+def _model(label: str, context: int) -> dict[str, Any]:
     return {
-        "npm": "@ai-sdk/openai-compatible",
-        "name": name,
-        "options": {
-            "baseURL": f"http://127.0.0.1:{port}/v1",
-            # Other users of this machine reach localhost too: the router wants this key.
-            "apiKey": api_key(),
-            "headerTimeout": 1_800_000,  # CPU prefill of a long prompt can exceed the 5 min default
-        },
-        "models": {
-            model_id: {
-                "name": label,
-                "tool_call": True,
-                "reasoning": True,
-                "limit": {"context": context, "output": min(32768, context // 2)},
-                # ctrl+t in OpenCode cycles these; oca's router translates them per model.
-                "variants": {e: {"reasoningEffort": e} for e in EFFORTS},
-            }
-        },
+        "name": label,
+        "tool_call": True,
+        "reasoning": True,
+        # A quarter for the reply: half left a 64k model 32k for the conversation.
+        "limit": {"context": context, "output": min(32768, context // 4)},
+        # ctrl+t in OpenCode cycles these; oca's router translates them per model.
+        "variants": {e: {"reasoningEffort": e} for e in EFFORTS},
     }
 
 
-def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> dict[str, Any]:
-    """One model, ``oca/auto``; its label names ``remote`` when the cluster answers now.
-
-    The context limit is the local model's, so a session can always fall back to it.
+def opencode_config(settings: Settings, titles: bool = False) -> dict[str, Any]:
+    """One model per server, named after it (ctrl+x m switches); the default server's model
+    is OpenCode's. Each has its server's context, so OpenCode compacts a session for it.
     """
-    local = settings.resolved_model
-    now = f"{remote.id} on UCloud" if remote else f"{local.id} ({settings.resolved_device})"
-    providers = {
-        PROVIDER: _provider(
-            "oca", settings.port, MODEL, f"auto, now {now}", settings.resolved_context
-        )
+    models = {
+        name: _model(f"{name}: {remotes.label(settings, name)}", remotes.context(settings, name))
+        for name in settings.servers()
     }
-    ref = f"{PROVIDER}/{MODEL}"
+    providers = {
+        PROVIDER: {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "oca",
+            "options": {
+                "baseURL": f"http://127.0.0.1:{settings.port}/v1",
+                # Other users of this machine reach localhost too: the router wants this key.
+                "apiKey": api_key(),
+                "headerTimeout": 1_800_000,  # CPU prefill of a long prompt can exceed 5 min
+            },
+            "models": models,
+        }
+    }
+    ref = f"{PROVIDER}/{settings.default}"
     return {
         "$schema": "https://opencode.ai/config.json",
         "autoupdate": False,  # versions are pinned by oca
@@ -115,13 +112,14 @@ def opencode_config(settings: Settings, remote: ClusterModel | None = None) -> d
         "small_model": ref,
         # Session titles, without thinking: free on the cluster (3.6 s per task with, 3.7
         # without), but on the local CPU server's single slot (MTP) a title request evicts the
-        # session's cached prompt: 77-121 s per task against 39 s. So only when it is up.
-        "agent": {"title": {"model": ref, "variant": "none"} if remote else {"disable": True}},
+        # session's cached prompt: 77-121 s per task against 39 s. So only on a remote that
+        # answers at launch.
+        "agent": {"title": {"model": ref, "variant": "none"} if titles else {"disable": True}},
     }
 
 
-def write_config(settings: Settings, remote: ClusterModel | None = None) -> Path:
-    cfg = opencode_config(settings, remote)
+def write_config(settings: Settings, titles: bool = False) -> Path:
+    cfg = opencode_config(settings, titles)
     write_private(config_path(), json.dumps(cfg, indent=2) + "\n")
     unattended = {**cfg, "permission": _refuse_asks(cfg["permission"])}
     write_private(config_path(unattended=True), json.dumps(unattended, indent=2) + "\n")

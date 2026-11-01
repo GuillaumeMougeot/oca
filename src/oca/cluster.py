@@ -1,13 +1,13 @@
-"""Serve a model with vLLM in a UCloud job and reach it through an SSH tunnel.
+"""The ucloud remote: a model served with vLLM in a UCloud job, reached through an SSH tunnel.
 
-Remote layout on the configured drive (``cluster_drive``):
+Remote layout on the remote's drive:
 
     <drive>/hf/<org>/<repo>/   weights in Hugging Face layout, shared by every job
     <drive>/oca/               job scripts, logs, caches and the vLLM venv
     <drive>/oca/servers/       one listing per running server, so members can join it
 
 Jobs run the ``terminal-almalinux`` app (it accepts SSH) as batch jobs: the job ends when
-its script exits, and the serve script exits after ``cluster_idle`` minutes without
+its script exits, and the serve script exits after the remote's ``idle`` minutes without
 requests, so a forgotten session stops spending GPU-hours on its own.
 
 UCloud installs every project member's registered SSH key in SSH-enabled jobs, so a
@@ -37,8 +37,9 @@ import httpx
 from .config import (
     VLLM_VERSION,
     ClusterModel,
+    Down,
     OcaError,
-    Settings,
+    Remote,
     data_dir,
     open_log,
     process_alive,
@@ -149,7 +150,7 @@ def serve_command(model: ClusterModel, key: str = "") -> list[str]:
     ]
 
 
-def serve_script(model: ClusterModel, settings: Settings, tag: str, key: str = "") -> str:
+def serve_script(model: ClusterModel, remote: Remote, tag: str, key: str = "") -> str:
     venv = f"/work/oca/venvs/vllm-{VLLM_VERSION}"
     listing = f"/work/oca/servers/{model.id}.json"
     health = f"http://127.0.0.1:{REMOTE_PORT}"
@@ -214,8 +215,8 @@ def serve_script(model: ClusterModel, settings: Settings, tag: str, key: str = "
             # No metrics is not proof of idleness: leave the stop to the time allocation.
             '  [ -z "$now" ] && continue',
             '  if [ "$now" = "$last" ]; then idle=$((idle + 1)); else idle=0; last="$now"; fi',
-            f'  if [ "$idle" -ge {settings.cluster_idle} ] && [ "$stopped" = 0 ]; then',
-            f'    echo "oca: idle for {settings.cluster_idle} min, stopping"',
+            f'  if [ "$idle" -ge {remote.idle} ] && [ "$stopped" = 0 ]; then',
+            f'    echo "oca: idle for {remote.idle} min, stopping"',
             '    stopped=1; kill "$pid"',
             "  fi",
             "done",
@@ -241,20 +242,17 @@ def _client() -> Iterator[UCloudClient]:
         raise OcaError(f"{e}\nLog in with `oca ucloud login`.") from e
 
 
-def _drive(settings: Settings) -> str:
-    if not settings.cluster_drive:
-        raise OcaError(
-            "no UCloud drive configured. List drives with `oca ucloud files drives`, then "
-            "`oca config cluster_drive /<drive id>`"
-        )
-    return settings.cluster_drive.rstrip("/")
+def _drive(remote: Remote) -> str:
+    if not remote.drive:
+        raise OcaError("this UCloud remote has no drive; add it again with `oca remote add`")
+    return remote.drive.rstrip("/")
 
 
-def _spec(settings: Settings, name: str, script: str, gpus: int, hours: int) -> JobSpecification:
+def _spec(remote: Remote, name: str, script: str, gpus: int, hours: int) -> JobSpecification:
     from ucloud_api import ComputeProduct, JobSpecification, NameAndVersion, SimpleDuration
     from ucloud_api.models import FileParam
 
-    drive = _drive(settings)
+    drive = _drive(remote)
     if gpus:
         product = ComputeProduct(
             id=f"gpu-nvidia-b200-{gpus}-gpu", category="gpu-nvidia-b200", provider="ucloud"
@@ -277,11 +275,11 @@ def _spec(settings: Settings, name: str, script: str, gpus: int, hours: int) -> 
 PULL_HOURS = 2
 
 
-def _submit(settings: Settings, job: Job, script: str, gpus: int) -> Job:
+def _submit(remote: Remote, job: Job, script: str, gpus: int) -> Job:
     from ucloud_api import Files, Jobs, Transfer
     from ucloud_api.exceptions import APIError
 
-    drive = _drive(settings)
+    drive = _drive(remote)
     with _client() as client:
         files = Files(client)
         for folder in ("hf", "oca", "oca/jobs", "oca/logs"):
@@ -290,11 +288,11 @@ def _submit(settings: Settings, job: Job, script: str, gpus: int) -> Job:
                     files.mkdir(f"{drive}/{folder}", conflict_policy="REJECT")
         local = data_dir() / "run" / f"{job.tag}.sh"
         write_private(local, script)
-        remote = f"{drive}/oca/jobs/{job.tag}.sh"
-        Transfer(client).upload(local, remote)
-        hours = settings.cluster_hours if gpus else PULL_HOURS
+        path = f"{drive}/oca/jobs/{job.tag}.sh"
+        Transfer(client).upload(local, path)
+        hours = remote.hours if gpus else PULL_HOURS
         job.job_id = Jobs(client).create(
-            _spec(settings, re.sub(r"[^A-Za-z0-9-]", "-", f"oca-{job.tag}"), remote, gpus, hours)
+            _spec(remote, re.sub(r"[^A-Za-z0-9-]", "-", f"oca-{job.tag}"), path, gpus, hours)
         )
     _write(job, job.kind)
     return job
@@ -325,29 +323,37 @@ def unregistered_key() -> Path | None:
     return next(iter(local))
 
 
-def weights_ready(settings: Settings, model: ClusterModel) -> bool:
+def drives() -> list[Any]:
+    """The UCloud drives this login can use."""
     from ucloud_api import Files
 
     with _client() as client:
-        return Files(client).stat(f"{_drive(settings)}/hf/{model.repo}/{MARKER}") is not None
+        return list(Files(client).list_drives())
 
 
-def pull(settings: Settings, model: ClusterModel) -> Job:
+def weights_ready(remote: Remote, model: ClusterModel) -> bool:
+    from ucloud_api import Files
+
+    with _client() as client:
+        return Files(client).stat(f"{_drive(remote)}/hf/{model.repo}/{MARKER}") is not None
+
+
+def pull(remote: Remote, model: ClusterModel) -> Job:
     """Download weights to the drive from a cheap CPU job."""
     job = _new("pull", model)
-    return _submit(settings, job, pull_script(model, job.tag), gpus=0)
+    return _submit(remote, job, pull_script(model, job.tag), gpus=0)
 
 
-def submit_serve(settings: Settings, model: ClusterModel) -> Job:
+def submit_serve(remote: Remote, model: ClusterModel) -> Job:
     job = _new("serve", model)
-    return _submit(settings, job, serve_script(model, settings, job.tag, job.key), model.gpus)
+    return _submit(remote, job, serve_script(model, remote, job.tag, job.key), model.gpus)
 
 
-def _listing(settings: Settings, model_id: str) -> str:
-    return f"{_drive(settings)}/oca/servers/{model_id}.json"
+def _listing(remote: Remote, model_id: str) -> str:
+    return f"{_drive(remote)}/oca/servers/{model_id}.json"
 
 
-def publish(settings: Settings, job: Job) -> None:
+def publish(remote: Remote, job: Job) -> None:
     """List our server on the drive so other project members' oca can join it."""
     from ucloud_api import Files, Transfer
     from ucloud_api.exceptions import APIError
@@ -361,18 +367,18 @@ def publish(settings: Settings, job: Job) -> None:
     write_private(local, json.dumps(entry))
     with _client() as client:
         with suppress(APIError):
-            Files(client).mkdir(f"{_drive(settings)}/oca/servers", conflict_policy="REJECT")
-        Transfer(client).upload(local, _listing(settings, job.model))
+            Files(client).mkdir(f"{_drive(remote)}/oca/servers", conflict_policy="REJECT")
+        Transfer(client).upload(local, _listing(remote, job.model))
 
 
-def join(settings: Settings, model: ClusterModel) -> tuple[Job, str] | None:
+def join(remote: Remote, model: ClusterModel) -> tuple[Job, str] | None:
     """Adopt the server another member listed for ``model``; returns it and its starter."""
     from ucloud_api import Jobs, Transfer
     from ucloud_api.exceptions import APIError, UCloudError
 
     with _client() as client:
         try:
-            entry = json.loads(Transfer(client).read_bytes(_listing(settings, model.id)))
+            entry = json.loads(Transfer(client).read_bytes(_listing(remote, model.id)))
             job = Job(
                 "serve", entry["job_id"], model.id, entry["tag"], 0, False, entry["endpoint"],
                 entry.get("key", ""),
@@ -386,17 +392,17 @@ def join(settings: Settings, model: ClusterModel) -> tuple[Job, str] | None:
     return job, str(entry.get("started_by", "another member"))
 
 
-def _unlist(settings: Settings, job: Job) -> None:
+def _unlist(remote: Remote, job: Job) -> None:
     from ucloud_api import Files, Transfer
     from ucloud_api.exceptions import UCloudError
 
-    path = _listing(settings, job.model)
+    path = _listing(remote, job.model)
     with _client() as client, suppress(UCloudError, ValueError):
         if json.loads(Transfer(client).read_bytes(path)).get("tag") == job.tag:
             Files(client).trash(path)
 
 
-def ended(settings: Settings, job: Job) -> bool:
+def ended(remote: Remote, job: Job) -> bool:
     """True, with the job forgotten, if it finished; False if it runs or we cannot tell."""
     from ucloud_api import Jobs
     from ucloud_api.exceptions import APIError
@@ -410,7 +416,7 @@ def ended(settings: Settings, job: Job) -> bool:
         return False
     _write(None, job.kind)
     if job.owner:
-        _unlist(settings, job)
+        _unlist(remote, job)
     return True
 
 
@@ -428,21 +434,21 @@ def job_status(job: Job) -> dict[str, Any]:
     return status if isinstance(status, dict) else {}
 
 
-def log_text(settings: Settings, job: Job) -> str:
+def log_text(remote: Remote, job: Job) -> str:
     """The job script's log, read from the drive (works after the job ended too)."""
     from ucloud_api import Transfer
     from ucloud_api.exceptions import UCloudError
 
     try:
         with _client() as client:
-            data: bytes = Transfer(client).read_bytes(f"{_drive(settings)}/oca/logs/{job.tag}.log")
+            data: bytes = Transfer(client).read_bytes(f"{_drive(remote)}/oca/logs/{job.tag}.log")
     except UCloudError:
         return ""
     return data.decode(errors="replace")
 
 
-def log_tail(settings: Settings, job: Job, lines: int = 40) -> str:
-    return "\n".join(log_text(settings, job).splitlines()[-lines:])
+def log_tail(remote: Remote, job: Job, lines: int = 40) -> str:
+    return "\n".join(log_text(remote, job).splitlines()[-lines:])
 
 
 def extend(job: Job, hours: int) -> None:
@@ -452,7 +458,7 @@ def extend(job: Job, hours: int) -> None:
         Jobs(client).extend(job.job_id, hours=hours)
 
 
-def terminate(settings: Settings, kind: str) -> bool:
+def terminate(remote: Remote, kind: str) -> bool:
     """Close the tunnel and forget the job; stop it too if we started it.
 
     Returns False when there was none.
@@ -468,7 +474,7 @@ def terminate(settings: Settings, kind: str) -> bool:
         with _client() as client, suppress(APIError):  # already finished is fine
             Jobs(client).terminate(job.job_id)
         if kind == "serve":
-            _unlist(settings, job)
+            _unlist(remote, job)
     _write(None, kind)
     return True
 
@@ -494,20 +500,20 @@ def _alive(pid: int) -> bool:
     return process_alive(pid, "ssh")
 
 
-def _port_open(port: int) -> bool:
+def port_open(port: int) -> bool:
     with socket.socket() as s:
         s.settimeout(1)
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def ensure_tunnel(settings: Settings, job: Job, timeout: float = 300) -> None:
+def ensure_tunnel(remote: Remote, job: Job, timeout: float = 300) -> None:
     from ucloud_api import Jobs
 
-    if _alive(job.tunnel_pid) and _port_open(settings.cluster_port):
+    if _alive(job.tunnel_pid) and port_open(remote.port):
         return
     saved = read(job.kind)  # the router's background check may have opened it meanwhile
     same = saved is not None and saved.job_id == job.job_id
-    if same and saved and _alive(saved.tunnel_pid) and _port_open(settings.cluster_port):
+    if same and saved and _alive(saved.tunnel_pid) and port_open(remote.port):
         job.tunnel_pid = saved.tunnel_pid
         return
     stop_tunnel(job)
@@ -521,13 +527,26 @@ def ensure_tunnel(settings: Settings, job: Job, timeout: float = 300) -> None:
                 time.sleep(5)
         job.endpoint = f"{found.user}@{found.host}:{found.port}"
         if job.owner and job.kind == "serve":
-            publish(settings, job)  # before saving the endpoint, so a failed listing is retried
+            publish(remote, job)  # before saving the endpoint, so a failed listing is retried
         _write(job, job.kind)
     login, port = job.endpoint.rsplit(":", 1)
     user, host = login.split("@", 1)
-    log = data_dir() / "logs" / "tunnel.log"
     known = data_dir() / "run" / f"known_hosts-{job.job_id}"
-    cmd = tunnel_command(user, host, int(port), settings.cluster_port, known)
+    cmd = tunnel_command(user, host, int(port), remote.port, known)
+    try:
+        job.tunnel_pid = open_tunnel(cmd, remote.port, data_dir() / "logs" / "tunnel.log")
+    except OcaError as e:
+        if "Permission denied" in str(e):
+            raise OcaError(
+                "UCloud rejected this machine's SSH key. Register it (see `oca remote up`); "
+                "a job only learns the keys registered before it started."
+            ) from e
+        raise
+    _write(job, job.kind)
+
+
+def open_tunnel(cmd: list[str], port: int, log: Path) -> int:
+    """Run ``ssh -N -L`` in the background; its pid once ``port`` accepts connections."""
     with open_log(log) as fh:
         proc = subprocess.Popen(
             cmd,
@@ -538,19 +557,13 @@ def ensure_tunnel(settings: Settings, job: Job, timeout: float = 300) -> None:
         )
     for _ in range(30):
         if proc.poll() is not None:
-            if "Permission denied" in log.read_text(errors="replace")[-2000:]:
-                raise OcaError(
-                    "UCloud rejected this machine's SSH key. Register it (see `oca cluster up`); "
-                    "a job only learns the keys registered before it started."
-                )
-            raise OcaError(f"SSH tunnel failed; see {log}")
-        if _port_open(settings.cluster_port):
-            job.tunnel_pid = proc.pid
-            _write(job, job.kind)
-            return
+            lines = log.read_text(errors="replace").strip().splitlines()
+            raise OcaError(f"SSH tunnel failed: {lines[-1] if lines else 'no output'}; see {log}")
+        if port_open(port):
+            return proc.pid
         time.sleep(1)
     proc.kill()
-    raise OcaError(f"SSH tunnel did not open port {settings.cluster_port}; see {log}")
+    raise OcaError(f"SSH tunnel did not open port {port}; see {log}")
 
 
 def stop_tunnel(job: Job) -> None:
@@ -558,15 +571,15 @@ def stop_tunnel(job: Job) -> None:
         os.kill(job.tunnel_pid, signal.SIGTERM)
 
 
-def healthy(settings: Settings) -> bool:
+def healthy(remote: Remote) -> bool:
     try:
-        url = f"http://127.0.0.1:{settings.cluster_port}/health"
+        url = f"http://127.0.0.1:{remote.port}/health"
         return httpx.get(url, timeout=5).status_code == 200
     except httpx.HTTPError:
         return False
 
 
-def check(settings: Settings, job: Job) -> str | None:
+def check(remote: Remote, job: Job) -> str | None:
     """One connection attempt: None when the server answers, else what it is doing.
 
     Re-opens the tunnel if needed. A finished job is forgotten and raises.
@@ -584,37 +597,37 @@ def check(settings: Settings, job: Job) -> str | None:
     if state.is_terminal:
         _write(None, job.kind)
         if job.owner:
-            _unlist(settings, job)
-        tail = log_tail(settings, job)
-        raise OcaError(f"job {job.job_id} ended ({state.value}). Log tail:\n{tail}")
+            _unlist(remote, job)
+        tail = log_tail(remote, job)
+        raise Down(f"job {job.job_id} ended ({state.value}). Log tail:\n{tail}")
     if state != JobState.RUNNING:
         return str(state.value).lower().replace("_", " ")
     try:
-        ensure_tunnel(settings, job)
+        ensure_tunnel(remote, job)
     except OcaError:
         if not job.owner:
             _write(None, job.kind)  # the shared server is gone or refuses us: stop trying it
         raise
-    if healthy(settings):
+    if healthy(remote):
         return None
-    last = log_tail(settings, job, lines=1)
+    last = log_tail(remote, job, lines=1)
     return f"loading: {last[-100:]}" if last else "starting"
 
 
 def wait_ready(
-    settings: Settings, job: Job, on_progress: Callable[[str], None], timeout: float = 7200
+    remote: Remote, job: Job, on_progress: Callable[[str], None], timeout: float = 7200
 ) -> None:
     """Block until the remote server answers, reporting the job state and last log line.
 
     ``timeout`` counts from the job's start: B200 queues can last hours.
     """
     deadline = None
-    while (doing := check(settings, job)) is not None:
+    while (doing := check(remote, job)) is not None:
         on_progress(doing)
         if doing == "in queue":
             deadline = None
         elif deadline is None:
             deadline = time.monotonic() + timeout
         elif time.monotonic() > deadline:
-            raise OcaError(f"not ready after {timeout / 60:.0f} min; see `oca cluster logs`")
+            raise OcaError(f"not ready after {timeout / 60:.0f} min; see `oca remote logs`")
         time.sleep(10)
