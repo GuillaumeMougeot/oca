@@ -603,10 +603,17 @@ def test_oca_asks_what_to_do_when_its_server_is_down(
 
     monkeypatch.setattr(remotes, "start", start)
     monkeypatch.setattr(cli, "_local", lambda settings, yes: started.append("local"))
-    picks = iter([1, 1])  # Restart spark; it fails, so: Use local
-    monkeypatch.setattr(typer, "prompt", lambda *args, **kwargs: next(picks))
+    asked: list[str] = []
+
+    def prompt(question: str, **kwargs: Any) -> str:
+        asked.append(question)
+        return next(picks)
+
+    picks = iter(["9", "1", "1"])  # not an option; Restart spark; it fails, so: Use local
+    monkeypatch.setattr(typer, "prompt", prompt)
     assert cli._ready(s) == "local" and started == ["spark", "local"]
-    picks = iter([3])  # Cancel
+    assert asked[0] == "Choose (1/2/3)" and len(asked) == 3
+    picks = iter(["3"])  # Cancel
     with pytest.raises(typer.Exit):
         cli._ready(s)
     monkeypatch.setattr(typer, "confirm", lambda *args, **kwargs: True)

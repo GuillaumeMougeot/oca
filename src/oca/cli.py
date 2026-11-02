@@ -14,7 +14,6 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
-import click
 import httpx
 import typer
 from rich.console import Console
@@ -59,6 +58,16 @@ ModelArg = Annotated[str | None, typer.Argument(help="Model id (default: the rem
 def _confirm(yes: bool, question: str, default: bool = True) -> None:
     if not (yes or typer.confirm(question, default=default)):
         raise typer.Exit(1)
+
+
+def _choose(question: str, answers: list[str], default: str) -> str:
+    """Ask until the answer is one of ``answers``, which the question lists.
+    (typer bundles its own click, so click's Choice neither shows nor checks them there.)"""
+    while (
+        got := str(typer.prompt(f"{question} ({'/'.join(answers)})", default=default))
+    ) not in answers:
+        console.print(f"Type one of: {', '.join(answers)}.")
+    return got
 
 
 def _ready(
@@ -120,7 +129,7 @@ def _instead(
         console.print(f"[yellow]{escape(title)}[/]")
         for i, c in enumerate([*options, Choice("Cancel", "Do not open OpenCode")], 1):
             console.print(f"  {i}. [bold]{escape(c.label)}[/]: {escape(c.description)}")
-        n = typer.prompt("Choose", default=1, type=click.IntRange(1, len(options) + 1))
+        n = int(_choose("Choose", [str(i) for i in range(1, len(options) + 2)], "1"))
         if n > len(options):
             raise typer.Exit(1)
         verb, server_name = options[n - 1].label.split()[:2]
@@ -576,10 +585,8 @@ def _new_ssh(host: str, model: str | None, port: int, yes: bool) -> Remote:
     else:
         who = "me"
         if not yes:
-            who = typer.prompt(
-                f"Install oca on {host} for you only, or for all its users?",
-                type=click.Choice(["me", "all"]),
-                default="me",
+            who = _choose(
+                f"Install oca on {host} for you only, or for all its users?", ["me", "all"], "me"
             )
         if who == "all":
             shared = typer.prompt("Folder for it", default=remotes.SHARED_ROOT)
