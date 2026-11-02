@@ -998,6 +998,42 @@ def test_starter_stops_and_unlists_its_server(ucloud: dict[str, Any]) -> None:
     assert ucloud["terminated"] == ["42"] and ucloud["files"] == {}
 
 
+def test_web_listens_on_the_vpn_address_when_asked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from oca import web
+
+    links = "4: wg0: <POINTOPOINT,NOARP,UP,LOWER_UP> mtu 1420\n"
+    addrs = {"wg0": "4: wg0    inet 11.0.0.5/24 scope global wg0\\\n"}
+
+    def ip(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        out = links if "link" in cmd else addrs.get(cmd[-1], "")
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(web.subprocess, "run", ip)
+    assert web.vpn_address() == "11.0.0.5"
+    links = ""
+    with pytest.raises(OcaError, match="0 WireGuard addresses"):
+        web.vpn_address()
+    started: list[list[str]] = []
+
+    class Proc:
+        pid = 4242
+
+        def __init__(self, cmd: list[str], **kwargs: Any) -> None:
+            started.append(cmd)
+
+        def poll(self) -> None:
+            return None
+
+    monkeypatch.setattr(web.install, "opencode", lambda: tmp_path / "opencode")
+    monkeypatch.setattr(web.subprocess, "Popen", Proc)
+    monkeypatch.setattr(web, "_listening", lambda host, port: host == "11.0.0.5")
+    state = web.start(4096, tmp_path, "11.0.0.5")
+    assert started[0][-4:] == ["--hostname", "11.0.0.5", "--port", "4096"]
+    assert state["host"] == "11.0.0.5"
+
+
 def test_web_password_is_made_once_and_private() -> None:
     first = agent.web_password()
     assert len(first) >= 20 and agent.web_password() == first

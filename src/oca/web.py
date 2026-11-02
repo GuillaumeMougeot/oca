@@ -1,7 +1,8 @@
 """OpenCode's web interface as a background server, for phones and other machines.
 
-It listens on localhost only, behind a password, so the way in is an SSH tunnel. It keeps
-running after the terminal that started it closes.
+It listens on localhost behind a password, so the way in is an SSH tunnel; or, with
+``--vpn``, on this machine's WireGuard address only, for devices that joined that VPN. It
+keeps running after the terminal that started it closes.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ def log_path() -> Path:
 
 
 def running() -> dict[str, Any] | None:
-    """The server's pid, port and project, if it runs."""
+    """The server's pid, host, port and project, if it runs."""
     try:
         state: dict[str, Any] = json.loads(state_path().read_text())
     except (FileNotFoundError, ValueError):
@@ -36,15 +37,42 @@ def running() -> dict[str, Any] | None:
     return state if process_alive(int(state.get("pid", 0)), "opencode") else None
 
 
-def _listening(port: int) -> bool:
+def _listening(host: str, port: int) -> bool:
     with socket.socket() as s:
         s.settimeout(0.5)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+        return s.connect_ex((host, port)) == 0
 
 
-def start(port: int, project: Path) -> dict[str, Any]:
-    """Serve ``project`` on 127.0.0.1:``port``, unless that server already runs."""
-    if (state := running()) and (state["port"], state["project"]) == (port, str(project)):
+def vpn_address() -> str:
+    """This machine's address on its WireGuard VPN, where devices that joined it reach it."""
+
+    def ip(*args: str) -> list[list[str]]:
+        try:
+            out = subprocess.run(["ip", "-o", *args], capture_output=True, text=True).stdout
+        except OSError:  # no iproute2, e.g. macOS
+            return []
+        return [line.split() for line in out.splitlines()]
+
+    links = [
+        words[1].rstrip(":").split("@")[0] for words in ip("link", "show", "type", "wireguard")
+    ]
+    found = [w[3].split("/")[0] for link in links for w in ip("-4", "addr", "show", "dev", link)]
+    if len(found) != 1:
+        raise OcaError(
+            f"this machine has {len(found)} WireGuard addresses ({', '.join(found) or 'none'});"
+            " `oca web --vpn` needs one"
+        )
+    return found[0]
+
+
+def start(port: int, project: Path, host: str = "127.0.0.1") -> dict[str, Any]:
+    """Serve ``project`` on ``host``:``port``, unless that server already runs."""
+    wanted = (host, port, str(project))
+    if (state := running()) and (
+        state.get("host", "127.0.0.1"),
+        state["port"],
+        state["project"],
+    ) == wanted:
         return state
     stop()
     exe = install.opencode()
@@ -59,7 +87,7 @@ def start(port: int, project: Path) -> dict[str, Any]:
     )
     with open_log(log_path()) as log:
         proc = subprocess.Popen(
-            [str(exe), "web", "--hostname", "127.0.0.1", "--port", str(port)],
+            [str(exe), "web", "--hostname", host, "--port", str(port)],
             cwd=project,
             env=env,
             stdin=subprocess.DEVNULL,
@@ -67,11 +95,11 @@ def start(port: int, project: Path) -> dict[str, Any]:
             stderr=subprocess.STDOUT,
             start_new_session=True,  # outlives the terminal, or SSH session, that started it
         )
-    state = {"pid": proc.pid, "port": port, "project": str(project)}
+    state = {"pid": proc.pid, "host": host, "port": port, "project": str(project)}
     state_path().parent.mkdir(parents=True, exist_ok=True)
     state_path().write_text(json.dumps(state))
     for _ in range(300):
-        if _listening(port):
+        if _listening(host, port):
             return state
         if proc.poll() is not None:
             break

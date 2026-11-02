@@ -22,4 +22,7 @@ The user wants to chat and code from the phone, with the local model or any remo
 - WireGuard on the phone stays useful for the full OpenCode page.
 - Open: a domain for the VPS (the app needs HTTPS), and whether it runs Docker.
 
+## The VPN route (2026-11-02)
+The user put the phone on the VPS's WireGuard VPN, which the workstation and the Spark are on too. `oca web --vpn` now listens on the workstation's WireGuard address only, not on the campus network, behind the same password; the phone opens `http://<address>:4096`. Claude Code's permission check refused to start it from the agent ("expose local services"): the user starts it.
+
 Sources: [OpenClaw security](https://www.techradar.com/pro/here-are-the-openclaw-security-risks-you-should-know-about), [OpenClaw and WhatsApp](https://zenvanriel.com/ai-engineer-blog/openclaw-whatsapp-risks-engineers-guide/), [OpenClaw with vLLM](https://documentation.openclaw.ai/providers/vllm), [an OpenCode Telegram bridge](https://github.com/vineetkishore01/Opencode-Telegram).

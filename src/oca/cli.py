@@ -467,20 +467,30 @@ def sessions_clear(yes: Yes = False) -> None:
 def web_ui(
     ctx: typer.Context,
     port: Annotated[int, typer.Option(help="Port on this machine.")] = 4096,
+    vpn: Annotated[
+        bool,
+        typer.Option("--vpn", help="Listen on this machine's WireGuard address, not on localhost."),
+    ] = False,
     yes: Yes = False,
 ) -> None:
     """OpenCode in a browser for this folder, e.g. on a phone; runs in the background."""
     if ctx.invoked_subcommand is not None:
         return
+    host = web.vpn_address() if vpn else "127.0.0.1"
     settings = Settings.load()
     _ready(settings, None, yes, pick=False)
-    state = web.start(port, Path.cwd())
+    state = web.start(port, Path.cwd(), host)
     console.print(
-        f"OpenCode for {state['project']} at http://127.0.0.1:{port}, user opencode, "
-        f"password {agent.web_password()}. It keeps running; `oca web stop` ends it.\n"
-        f"From a phone: `ssh -N -L {port}:127.0.0.1:{port} <you>@<this machine>`, "
-        "then open that address."
+        f"OpenCode for {state['project']} at http://{host}:{port}, user opencode, "
+        f"password {agent.web_password()}. It keeps running; `oca web stop` ends it."
     )
+    if vpn:
+        console.print("Open that address on a phone or computer that joined the VPN.")
+    else:
+        console.print(
+            f"From a phone: `oca web --vpn` if it joined this machine's WireGuard VPN, else "
+            f"`ssh -N -L {port}:127.0.0.1:{port} <you>@<this machine>` and that address."
+        )
 
 
 @web_app.command("stop")
@@ -922,7 +932,8 @@ def status() -> None:
     pid = router.running()
     table.add_row("endpoint", f"pid {pid}, port {settings.port}" if pid else "stopped")
     ui = web.running()
-    table.add_row("web", f"port {ui['port']}, {ui['project']}" if ui else "stopped")
+    where = f"http://{ui.get('host', '127.0.0.1')}:{ui['port']}, {ui['project']}" if ui else ""
+    table.add_row("web", where or "stopped")
     if state:
         health = "ready" if server.healthy(state.port) else "loading"
         table.add_row("server", f"pid {state.pid}, port {state.port}, {health}")

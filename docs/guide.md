@@ -112,9 +112,11 @@ Once per project, download the weights: `oca pull flash-next@ucloud`. This runs 
 
 ## Phone and other machines
 
-`oca web` serves OpenCode's web interface for the current folder, in the background. It listens on localhost only and needs a password: the user is `opencode`, and `oca web` prints the password. It keeps running after you log out; `oca web stop` ends it.
+`oca web` serves OpenCode's web interface for the current folder, in the background. It needs a password: the user is `opencode`, and `oca web` prints the password. It keeps running after you log out; `oca web stop` ends it.
 
-From a phone, one SSH command starts it if needed and opens the tunnel, with no tmux:
+**A phone on the same VPN** is the easy way: if this machine and the phone are both on a WireGuard VPN, `oca web --vpn` listens on this machine's VPN address only, not on its other networks, and prints the address to open, such as `http://10.0.0.5:4096`. WireGuard encrypts the traffic; the password still guards the page. On the phone, the browser's "Add to home screen" makes it an app icon.
+
+Without a VPN, it listens on localhost only, and one SSH command from the phone starts it if needed and opens the tunnel, with no tmux:
 
 ```bash
 ssh -L 4096:127.0.0.1:4096 you@workstation 'cd ~/codes/PROJECT && ~/.local/bin/oca web && sleep infinity'

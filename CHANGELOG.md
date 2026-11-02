@@ -13,6 +13,7 @@
 - **Tab completion is on by default** (bash, zsh, fish): commands, ids and server names. oca installs it on its first run; bash and fish need no change to their rc file.
 - **`oca sessions`** prints this folder's sessions, the latest first, whole titles and short ids, with no pager to quit. `oca -r` takes the start of an id, or alone offers a numbered list. `oca sessions rm <id>` and `oca sessions clear` replace `--delete` and `--clear`.
 - **`oca server update <name>`** reinstalls oca on a machine over SSH.
+- **`oca web --vpn`** listens on this machine's WireGuard address only, so a phone on the same VPN opens OpenCode without an SSH tunnel.
 - `-h` shows help, like `--help`. Questions with fixed answers list them and ask again after a wrong one.
 - **When a server is down, oca asks** in OpenCode's menu, saying why: restart it, use another server, or stop. It never switches by itself. A server used instead serves until the session's own answers again; a smaller one sees the latest messages.
 - **`oca serve`** serves this machine's model to other machines' oca, which run it over SSH; it stops when idle and records why it stopped.
