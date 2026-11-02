@@ -83,7 +83,7 @@ class Conn:
     port: int
     key: str
     context: int
-    mine: bool  # started by this user, so `oca remote down` stops it
+    mine: bool  # started by this user, so `oca stop <name>` stops it
     tunnel_pid: int = 0
 
 
@@ -120,11 +120,17 @@ def context(settings: Settings, name: str) -> int:
     return r.context
 
 
-def label(settings: Settings, name: str) -> str:
+def where(settings: Settings, name: str) -> str:
+    """Where server ``name`` runs: this machine, UCloud, an SSH host or a URL."""
     if name == "local":
-        return f"{settings.resolved_model.id} on this machine ({settings.resolved_device})"
+        return f"this machine ({settings.resolved_device})"
     r = settings.remotes[name]
-    return f"{r.model} on " + {"ucloud": "UCloud", "ssh": r.host, "url": r.url}[r.kind]
+    return {"ucloud": "UCloud", "ssh": r.host, "url": r.url}[r.kind]
+
+
+def label(settings: Settings, name: str) -> str:
+    model = settings.resolved_model.id if name == "local" else settings.remotes[name].model
+    return f"{model} on {where(settings, name)}"
 
 
 @dataclass(frozen=True)
@@ -187,7 +193,10 @@ def backend(settings: Settings, name: str) -> Backend | None:
         return Backend(name, here, job.model, job.key, size, efforts)
     if r.kind == "ssh":
         conn = read_conn(name)
-        return None if conn is None else Backend(name, here, conn.model, conn.key, conn.context)
+        if conn is None:
+            return None
+        efforts = MODELS[conn.model].efforts if conn.model in MODELS else ()
+        return Backend(name, here, conn.model, conn.key, conn.context, efforts)
     return Backend(name, r.url, r.model, r.key, r.context)
 
 
@@ -399,7 +408,8 @@ def serve_call(r: Remote, args: str) -> dict[str, Any]:
 @dataclass
 class Probe:
     arch: str
-    gpu: str  # name and memory of its first GPU, "" without one
+    gpu: str  # its first NVIDIA GPU, "" without one
+    memory: float  # GB that GPU has: its RAM when they share it, as on a DGX Spark
     shared: bool  # oca is installed there for all users
     personal: bool  # this user has their own oca there
 
@@ -411,7 +421,7 @@ def probe(host: str, root: str = SHARED_ROOT) -> Probe:
         f"uname -m; test -f {q}/shared.toml && echo @shared; "
         'test -x "$HOME/.local/bin/oca" && echo @personal; '
         "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1;"
-        " true",
+        " awk '/^MemTotal:/ {print \"@mem\", $2}' /proc/meminfo; true",
     )
     if done.returncode != 0:
         said = done.stderr.strip().splitlines()
@@ -420,9 +430,13 @@ def probe(host: str, root: str = SHARED_ROOT) -> Probe:
             f"without a password: `ssh {host}` once, and `ssh-copy-id {host}` if it asks for one."
         )
     lines = done.stdout.strip().splitlines()
-    gpu = [line for line in lines[1:] if not line.startswith("@")]
+    kib = next((line.split()[1] for line in lines if line.startswith("@mem ")), "0")
+    gpus = [line for line in lines[1:] if not line.startswith("@")]
+    gpu, _, size = (gpus[0] if gpus else "").partition(", ")
+    vram = float(size.split()[0]) * 1.048576 / 1000 if size.endswith(" MiB") else None
+    memory = (int(kib) * 1024 / 1e9 if vram is None else vram) if gpu else 0.0  # None: unified
     arch = lines[0] if lines else ""
-    return Probe(arch, gpu[0] if gpu else "", "@shared" in lines, "@personal" in lines)
+    return Probe(arch, gpu, memory, "@shared" in lines, "@personal" in lines)
 
 
 def install(host: str, shared: str = "") -> None:
@@ -441,8 +455,9 @@ def install(host: str, shared: str = "") -> None:
     if done.returncode == 3:
         raise OcaError(
             f"{shared} on {host} must exist and be writable by the users who share it. An admin "
-            f"of {host} runs once, with a group all of them are in:\n"
-            f"  sudo mkdir -p {shared} && sudo chgrp <group> {shared} && sudo chmod 2775 {shared}"
+            f"of {host} runs once, adding each of them (you too) to the group oca:\n"
+            f"  sudo groupadd -f oca && sudo usermod -aG oca <user> && "
+            f"sudo install -d -g oca -m 2775 {shared}"
         )
     if done.returncode != 0:
         said = (done.stderr.strip() or done.stdout.strip() or "no output").splitlines()

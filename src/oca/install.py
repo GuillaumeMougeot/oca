@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -156,12 +157,23 @@ def setup(force: bool = False) -> None:
         install_release([f"{base}/{opencode_asset(os_name, cpu_arch)}"], opencode_dir())
 
 
+def files(model: Model) -> list[str]:
+    """The model's files. A split GGUF has several parts; the first, which llama.cpp opens and
+    `model_path` names, comes last, so that it exists only once the whole model does."""
+    first = re.search(r"-00001-of-(\d{5})\.gguf$", model.file)
+    if first is None:
+        return [model.file]
+    count = int(first[1])
+    rest = [model.file.replace("-00001-of-", f"-{i:05d}-of-") for i in range(2, count + 1)]
+    return [*rest, model.file]
+
+
 def pull(model: Model) -> Path:
     from huggingface_hub import hf_hub_download  # slow import, only needed here
 
-    dest = model_path(model)
-    hf_hub_download(model.repo, model.file, local_dir=dest.parent)
-    return dest
+    for name in files(model):
+        hf_hub_download(model.repo, name, local_dir=data_dir() / "models" / model.repo)
+    return model_path(model)
 
 
 # Only what oca creates is deleted, so an OCA_DATA pointing at a shared disk is never wiped.

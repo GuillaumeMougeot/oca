@@ -147,7 +147,7 @@ def supervise(idle: int) -> None:
     """The background process: install, download, serve, stop when idle, say why."""
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # runs the cleanup below
     _set(pid=os.getpid(), state="starting")
-    why = f"stopped by {getpass.getuser()}"  # SIGTERM, from `oca remote down`
+    why = f"stopped by {getpass.getuser()}"  # SIGTERM, from `oca stop <server>`
     try:
         settings = Settings.load()
         if not install.is_installed():

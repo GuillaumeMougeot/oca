@@ -538,8 +538,8 @@ def ensure_tunnel(remote: Remote, job: Job, timeout: float = 300) -> None:
     except OcaError as e:
         if "Permission denied" in str(e):
             raise OcaError(
-                "UCloud rejected this machine's SSH key. Register it (see `oca remote up`); "
-                "a job only learns the keys registered before it started."
+                "UCloud rejected this machine's SSH key. Register it once (`oca ucloud ssh-keys "
+                "add ~/.ssh/<key>.pub`); a job only learns the keys registered before it started."
             ) from e
         raise
     _write(job, job.kind)

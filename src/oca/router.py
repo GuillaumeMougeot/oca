@@ -86,7 +86,8 @@ class Router:
         with self.starting("local"):
             server.start(self.settings)
         url = f"http://127.0.0.1:{server.port(self.settings)}"
-        return Backend("local", url, model.id, self.key, self.settings.resolved_context)
+        context = self.settings.resolved_context
+        return Backend("local", url, model.id, self.key, context, model.efforts)
 
     def live(self, name: str) -> bool:
         """Whether ``name`` answers now, without starting it."""
@@ -151,7 +152,7 @@ class Router:
             return "`oca start` restarts it; ctrl+x m picks another server."
         if self.settings.remotes[name].kind == "url":
             return "ctrl+x m picks another server."  # someone else's to restart
-        return f"`oca remote up {name}` restarts it; ctrl+x m picks another server."
+        return f"`oca start {name}` restarts it; ctrl+x m picks another server."
 
     def question(self, down: str, title: str, failed: tuple[str, ...] = ()) -> dict[str, Any]:
         """oca's question while ``down`` is down, as the arguments of OpenCode's tool."""

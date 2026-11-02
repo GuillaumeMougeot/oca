@@ -29,7 +29,7 @@ class OcaError(Exception):
 
 
 class Down(OcaError):
-    """Nothing serves on that remote: `oca remote up` starts it."""
+    """Nothing serves on that remote: `oca start <name>` starts it."""
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,8 @@ class Model:
     note: str
     # Sampling recommended by the model card.
     args: tuple[str, ...] = ("--temp", "0.6", "--top-p", "0.95", "--top-k", "20")
+    # Its reasoning_effort for low, medium, high and max, as for ClusterModel.
+    efforts: tuple[str | int, ...] = ()
 
 
 MODELS: dict[str, Model] = {
@@ -69,13 +71,23 @@ MODELS: dict[str, Model] = {
             65536,
             "dense, Apache-2.0: GPU default",
         ),
+        Model(
+            "qwen3.8-flash-next",
+            "unsloth/Qwen3.8-Flash-Next-GGUF",
+            "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+            93.7,
+            262144,  # 12 of 48 layers keep a KV cache (24 KB/token): the full context is ~6.4 GB
+            "125B MoE, 6B active, Qwen Community License: for 128 GB, e.g. a DGX Spark",
+            ("--temp", "1.0", "--top-p", "0.95", "--top-k", "20", "--min-p", "0.0"),
+            ("low", "medium", "xhigh", "xhigh"),  # as on UCloud; xhigh is its default
+        ),
     )
 }
 DEFAULT_MODEL = {"cpu": "qwen3.6-35b-a3b", "gpu": "qwen3.8-27b"}
 
 
 # oca's effort levels, offered to OpenCode as variants of oca/auto. "none" turns thinking off;
-# a cluster model maps the others to its own `reasoning_effort` values.
+# a model with `efforts` maps the others to its own `reasoning_effort` values.
 EFFORTS = ("none", "low", "medium", "high", "max")
 
 
@@ -326,7 +338,7 @@ class Settings:
             if r.kind == "ssh" and r.model not in MODELS:
                 raise OcaError(f"remote {name}: unknown model {r.model!r}; see `oca models`")
         if self.default not in self.servers():
-            raise OcaError(f"unknown server {self.default!r}; see `oca remote`")
+            raise OcaError(f"unknown server {self.default!r}; see `oca ls`")
 
     def set(self, key: str, value: str) -> None:
         names = {f.name for f in fields(self)} - {"remotes"}  # `oca remote` manages those

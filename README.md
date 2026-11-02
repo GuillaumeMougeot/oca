@@ -11,7 +11,8 @@ A Claude Code–like coding agent built only from open-source software and open-
 curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.sh | sh
 oca                          # first run asks which servers to use, then opens OpenCode
 oca remote add spark you@spark   # optional: a machine over SSH; or `ucloud`, or a URL
-oca -r spark                 # a session on that server; `oca remote default spark` for all
+oca ls                       # every server: where, model, state; * marks the default
+oca spark                    # a session on that server; `oca remote default spark` for all
 oca web                      # OpenCode in a browser, e.g. on a phone
 ```
 

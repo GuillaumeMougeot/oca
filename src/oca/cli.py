@@ -9,16 +9,18 @@ import shlex
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from importlib.metadata import version
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from typer.core import TyperGroup
 
 from . import agent, cluster, install, remotes, router, serve, server, web
 from .config import (
@@ -35,20 +37,36 @@ from .config import (
 )
 from .remotes import Choice
 
+
+class _Oca(TyperGroup):
+    """`oca <server>` opens OpenCode on that server, as `oca -r <server>` does."""
+
+    def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
+        word = args[0] if args else ""
+        if word and not word.startswith("-") and word not in self.commands:
+            if word not in Settings.load().servers():
+                ctx.fail(f"no command or server {word!r}; `oca ls` lists the servers")
+            args = ["--remote", *args]
+        return super().parse_args(ctx, args)
+
+
 app = typer.Typer(
+    cls=_Oca,
     name="oca",
-    help="Open Coding Agent. `oca` alone sets up what is missing and opens OpenCode.",
+    help="Open Coding Agent. `oca` alone sets up what is missing and opens OpenCode on the "
+    "default server; `oca <server>` opens it on another (`oca ls` lists them).",
     add_completion=False,
     invoke_without_command=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 remote_app = typer.Typer(
-    help="Servers on other machines: UCloud, one you reach over SSH (e.g. a DGX Spark), or "
-    "a URL. Alone, it lists all servers.",
+    help="Add, remove and configure servers on other machines: UCloud, one you reach over SSH "
+    "(e.g. a DGX Spark), or a URL. Alone, it lists all servers, as `oca ls` does.",
     invoke_without_command=True,
 )
-app.add_typer(remote_app, name="remote")
+app.add_typer(remote_app, name="remote", rich_help_panel="Servers")
 web_app = typer.Typer(help="OpenCode in a browser for this folder, e.g. on a phone.")
-app.add_typer(web_app, name="web")
+app.add_typer(web_app, name="web", rich_help_panel="Sessions")
 console = Console()
 Yes = Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")]
 NameArg = Annotated[str | None, typer.Argument(help="The remote (default: the default one).")]
@@ -83,7 +101,7 @@ def _ready(
         _first_run(settings)
     name = name or settings.default
     if name not in settings.servers():
-        raise OcaError(f"unknown server {name!r}; see `oca remote`")
+        raise OcaError(f"unknown server {name!r}; see `oca ls`")
     try:
         if name == "local":
             _local(settings, yes)
@@ -202,7 +220,7 @@ def main(
     session: Annotated[str | None, typer.Option("--session", "-s", help="Resume this one.")] = None,
     remote: Annotated[
         str | None,
-        typer.Option("--remote", "-r", help="Use this server, not the default; see `oca remote`."),
+        typer.Option("--remote", "-r", help="Open this server, not the default; `oca <server>`."),
     ] = None,
     yes: Yes = False,
 ) -> None:
@@ -217,7 +235,10 @@ def main(
         agent.launch(args)
 
 
-@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@app.command(
+    rich_help_panel="Sessions",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
 def run(ctx: typer.Context, yes: Yes = False) -> None:
     """Like `oca`, passing extra arguments to OpenCode (e.g. `oca run -- run "fix the tests"`)."""
     settings = Settings.load()
@@ -227,7 +248,7 @@ def run(ctx: typer.Context, yes: Yes = False) -> None:
     agent.launch(args)
 
 
-@app.command()
+@app.command(rich_help_panel="Sessions")
 def sessions(
     delete: Annotated[str | None, typer.Option("--delete", help="Delete this session.")] = None,
     clear: Annotated[bool, typer.Option("--clear", help="Delete this folder's sessions.")] = False,
@@ -246,7 +267,105 @@ def sessions(
     console.print(f"Deleted {len(ids)} sessions.")
 
 
-@app.command()
+ServerArg = Annotated[str | None, typer.Argument(help="A server (default: this machine's).")]
+
+
+@app.command("ls", rich_help_panel="Servers")
+def ls() -> None:
+    """List the servers: where each runs, its model and state; * marks the default."""
+    _list(Settings.load())
+
+
+def _list(settings: Settings) -> None:
+    names = settings.servers()
+    with ThreadPoolExecutor(len(names)) as pool:  # each may ask its machine
+        states = dict(zip(names, pool.map(lambda n: _state(settings, n), names), strict=True))
+    table = Table("", "server", "where", "model", "context", "state", box=None)
+    for name in names:
+        r = settings.remotes.get(name)
+        where = remotes.where(settings, name) + (" (all users)" if r and r.shared else "")
+        model = r.model if r else settings.resolved_model.id
+        size = f"{remotes.context(settings, name) // 1000}k"
+        mark = "*" if name == settings.default else ""
+        table.add_row(mark, name, where, model, size, states[name])
+    console.print(table)
+    console.print(
+        "* is the default, which plain `oca` opens. `oca <server>` opens another; "
+        "`oca start <server>` only starts it."
+    )
+
+
+@app.command(rich_help_panel="Servers")
+def start(
+    name: ServerArg = None,
+    model: ModelArg = None,
+    wait: Annotated[bool, typer.Option("--wait", "-w", help="Wait until it answers.")] = False,
+    yes: Yes = False,
+) -> None:
+    """Start a server without opening OpenCode, or join one someone else runs.
+
+    Alone, it starts this machine's, and restarts it if settings changed.
+    """
+    settings = Settings.load()
+    if name in (None, "local"):
+        if model:
+            settings.set("model", model)
+            settings.save()
+        with console.status("Starting llama-server"):
+            server.start(settings)
+        router.ensure(settings)
+        agent.write_config(settings)
+        console.print(
+            f"Serving at http://127.0.0.1:{settings.port}/v1, one model per server "
+            f"({', '.join(settings.servers())}); {settings.default} by default."
+        )
+        return
+    name = _remote(settings, name)
+    doing = _up(settings, name, model, yes)
+    if wait and doing is not None:
+        began = time.monotonic()
+        with console.status("waiting") as st:
+            remotes.wait_ready(settings, name, st.update)
+        console.print(f"Ready after {(time.monotonic() - began) / 60:.0f} min.")
+        doing = None
+    router.ensure(settings)
+    agent.write_config(settings, titles=doing is None and settings.default == name)
+    how = "plain `oca`" if settings.default == name else f"`oca {name}`"
+    if doing is None:
+        console.print(f"{name} answers; {how} opens it.")
+    else:
+        console.print(f"{name}: {doing}. {how} waits for it; `oca ls` shows its state.")
+
+
+@app.command(rich_help_panel="Servers")
+def stop(name: ServerArg = None) -> None:
+    """Stop a server you started, or leave one you joined.
+
+    Alone, it stops this machine's and oca's endpoint.
+    """
+    if name in (None, "local"):
+        here = [server.stop(), *([router.stop()] if name is None else [])]
+        console.print("Stopped." if any(here) else "Not running.")
+        return
+    settings = Settings.load()
+    name = _remote(settings, name)
+    r = settings.remotes[name]
+    if r.kind == "url":
+        raise OcaError(f"{name} is not oca's to stop; `oca remote remove {name}` forgets it")
+    if r.kind == "ucloud":
+        job = cluster.read("serve")
+        cluster.terminate(r, "serve")
+        stopped = None if job is None else job.owner
+    else:
+        stopped = remotes.down(settings, name)
+    agent.write_config(settings)
+    if stopped is None:
+        console.print("Nothing was running.")
+    else:
+        console.print("Stopped." if stopped else "Left; the server keeps running for others.")
+
+
+@app.command(rich_help_panel="Setup")
 def update() -> None:
     """Install the newest oca release, then the binaries it pins."""
     if install.editable():
@@ -288,7 +407,7 @@ def web_stop() -> None:
     console.print("Stopped." if web.stop() else "Not running.")
 
 
-@app.command()
+@app.command(rich_help_panel="Setup")
 def setup(force: Annotated[bool, typer.Option(help="Reinstall binaries.")] = False) -> None:
     """Install pinned llama.cpp and OpenCode binaries; write the OpenCode config."""
     install.setup(force=force)
@@ -299,7 +418,7 @@ def setup(force: Annotated[bool, typer.Option(help="Reinstall binaries.")] = Fal
     console.print(f"Installed into {data_dir() / 'bin'}. Next: `oca` (downloads the model).")
 
 
-@app.command()
+@app.command(rich_help_panel="Setup")
 def pull(
     model: Annotated[str | None, typer.Argument(help="Model id, see `oca models`.")] = None,
 ) -> None:
@@ -310,7 +429,7 @@ def pull(
     console.print(f"Saved {install.pull(MODELS[model] if model else settings.resolved_model)}")
 
 
-@app.command()
+@app.command(rich_help_panel="Setup")
 def models() -> None:
     """List the models: llama.cpp ones (this machine, SSH remotes) and UCloud ones."""
     local = Table("llama.cpp id", "GB", "context", "downloaded", "note")
@@ -323,28 +442,7 @@ def models() -> None:
     console.print(local, remote)
 
 
-@app.command()
-def start() -> None:
-    """Start the local model server and oca's endpoint (restarts them if settings changed)."""
-    settings = Settings.load()
-    with console.status("Starting llama-server"):
-        server.start(settings)
-    router.ensure(settings)
-    agent.write_config(settings)
-    console.print(
-        f"Serving at http://127.0.0.1:{settings.port}/v1, one model per server "
-        f"({', '.join(settings.servers())}); {settings.default} by default."
-    )
-
-
-@app.command()
-def stop() -> None:
-    """Stop the local model server and oca's endpoint."""
-    stopped = [router.stop(), server.stop()]
-    console.print("Stopped." if any(stopped) else "Not running.")
-
-
-@app.command()
+@app.command(rich_help_panel="Servers")
 def status() -> None:
     """Show settings, installed parts and server health."""
     settings = Settings.load()
@@ -373,7 +471,7 @@ def status() -> None:
     console.print(table)
 
 
-@app.command()
+@app.command(rich_help_panel="Servers")
 def logs(
     follow: Annotated[bool, typer.Option("--follow", "-f")] = False,
     lines: Annotated[int, typer.Option("--lines", "-n")] = 40,
@@ -384,7 +482,7 @@ def logs(
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Setup")
 def config(
     key: Annotated[str | None, typer.Argument()] = None,
     value: Annotated[str | None, typer.Argument()] = None,
@@ -407,6 +505,7 @@ def config(
 
 
 @app.command(
+    rich_help_panel="Setup",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     add_help_option=False,
 )
@@ -417,7 +516,7 @@ def ucloud(ctx: typer.Context) -> None:
     ucloud_app(args=ctx.args, prog_name="oca ucloud")
 
 
-@app.command()
+@app.command(rich_help_panel="Setup")
 def uninstall(
     keep_models: Annotated[bool, typer.Option(help="Keep downloaded local models.")] = False,
     purge: Annotated[
@@ -464,9 +563,9 @@ def _remote(settings: Settings, name: str | None) -> str:
         elif len(settings.remotes) == 1:
             name = next(iter(settings.remotes))
         else:
-            raise OcaError("which remote? See `oca remote`; `oca remote add` adds one")
+            raise OcaError("which remote? See `oca ls`; `oca remote add` adds one")
     if name not in settings.remotes:
-        raise OcaError(f"unknown remote {name!r}; see `oca remote`")
+        raise OcaError(f"unknown remote {name!r}; see `oca ls`")
     return name
 
 
@@ -477,17 +576,24 @@ def _cluster_model(mid: str) -> ClusterModel:
 
 
 def _state(settings: Settings, name: str) -> str:
+    """What server ``name`` is doing; an SSH machine is asked, since it may have stopped it."""
     if name == "local":
         st = server.read_state()
         return "stopped" if st is None else "ready" if server.healthy(st.port) else "loading"
     r, found = settings.remotes[name], remotes.backend(settings, name)
-    if found is None:
-        return "down" if r.kind != "url" else "not answering"
-    if remotes.healthy(found):
+    if found is not None and remotes.healthy(found):
         return "ready"
-    job = cluster.read("serve") if r.kind == "ucloud" else None
+    if r.kind == "url":
+        return "not answering"
+    if r.kind == "ssh":
+        try:
+            told = remotes.serve_call(r, "--status")
+        except OcaError:
+            return "not answering"
+        return str(told.get("state")) + (f" ({told['why']})" if told.get("why") else "")
+    job = cluster.read("serve")
     if job is None:
-        return "starting"
+        return "down"
     try:
         status = cluster.job_status(job)
     except OcaError:
@@ -501,24 +607,16 @@ def _state(settings: Settings, name: str) -> str:
 
 @remote_app.callback(invoke_without_command=True)
 def remote_list(ctx: typer.Context) -> None:
-    """List the servers; * marks the default, which plain `oca` uses."""
-    if ctx.invoked_subcommand is not None:
-        return
-    settings = Settings.load()
-    table = Table("", "server", "model", "context", "state", box=None)
-    for name in settings.servers():
-        size = f"{remotes.context(settings, name) // 1000}k"
-        mark = "*" if name == settings.default else ""
-        table.add_row(mark, name, remotes.label(settings, name), size, _state(settings, name))
-    console.print(table)
-    console.print(
-        "`oca -r <server>` starts a session on another one; in OpenCode, ctrl+x m switches."
-    )
+    """List the servers, as `oca ls` does."""
+    if ctx.invoked_subcommand is None:
+        _list(Settings.load())
 
 
 def _add(settings: Settings, name: str, target: str, model: str | None, yes: bool) -> None:
     if name in settings.servers():
         raise OcaError(f"{name} exists; `oca remote remove {name}` first")
+    if name in _commands():
+        raise OcaError(f"{name} is an oca command, so `oca {name}` could not open it: pick another")
     if not NAME.fullmatch(name):
         raise OcaError(f"name {name!r}: use lowercase letters, digits and dashes")
     port = max([8000, *(r.port for r in settings.remotes.values())]) + 1
@@ -537,9 +635,15 @@ def _add(settings: Settings, name: str, target: str, model: str | None, yes: boo
     agent.write_config(settings)
     console.print(
         f"Added {name}: {remotes.label(settings, name)}. "
-        + ("Plain `oca` uses it; " if settings.default == name else f"`oca -r {name}` uses it; ")
-        + ("it answers already." if remote.kind == "url" else f"`oca remote up {name}` starts it.")
+        + ("Plain `oca` opens it; " if settings.default == name else f"`oca {name}` opens it; ")
+        + ("it answers already." if remote.kind == "url" else f"`oca start {name}` starts it.")
     )
+
+
+def _commands() -> set[str]:
+    """oca's own words, which server names must not take."""
+    named = (c.name or (c.callback.__name__ if c.callback else "") for c in app.registered_commands)
+    return {n.replace("_", "-") for n in named} | {g.name or "" for g in app.registered_groups}
 
 
 def _new_ucloud(settings: Settings, model: str | None, port: int) -> Remote:
@@ -577,7 +681,9 @@ def _new_url(url: str, model: str | None) -> Remote:
 def _new_ssh(host: str, model: str | None, port: int, yes: bool) -> Remote:
     with console.status(f"Looking at {host}"):
         found = remotes.probe(host)
-    console.print(f"{host}: {found.arch}, {found.gpu or 'no NVIDIA GPU'}.")
+    gpu = f"{found.gpu} with {found.memory:.0f} GB" if found.gpu else "no NVIDIA GPU"
+    console.print(f"{host}: {found.arch}, {gpu}.")
+    model = model or _ssh_model(host, found.memory, yes)
     shared = ""
     if found.shared:  # someone installed it for everyone: join that
         shared = remotes.SHARED_ROOT
@@ -592,14 +698,24 @@ def _new_ssh(host: str, model: str | None, port: int, yes: bool) -> Remote:
             shared = typer.prompt("Folder for it", default=remotes.SHARED_ROOT)
             if remotes.probe(host, shared).shared:
                 console.print(f"{host} has oca for all its users in {shared}; using it.")
-                return Remote(
-                    "ssh", model=model or DEFAULT_MODEL["cpu"], port=port, host=host, shared=shared
-                )
+                return Remote("ssh", model=model, port=port, host=host, shared=shared)
         if shared or not found.personal:
             with console.status(f"Installing oca on {host}; this takes a few minutes"):
                 remotes.install(host, shared)
-    # A MoE model: fast on any GPU, even on a DGX Spark's slower memory.
-    return Remote("ssh", model=model or DEFAULT_MODEL["cpu"], port=port, host=host, shared=shared)
+    return Remote("ssh", model=model, port=port, host=host, shared=shared)
+
+
+def _ssh_model(host: str, memory: float, yes: bool) -> str:
+    """Ask which model it serves, offering the biggest that fits its GPU first."""
+    fits = [m for m in MODELS.values() if m.size_gb * 1.2 <= memory]  # cache and buffers too
+    if not fits:
+        return DEFAULT_MODEL["cpu"]
+    fits.sort(key=lambda m: -m.size_gb)
+    if yes:
+        return fits[0].id
+    for m in fits:
+        console.print(f"  [bold]{m.id}[/]: {m.size_gb:g} GB; {escape(m.note)}")
+    return _choose(f"Model for {host}", [m.id for m in fits], fits[0].id)
 
 
 @remote_app.command("add")
@@ -643,7 +759,7 @@ def remote_default(name: Annotated[str, typer.Argument(help="A remote, or local.
     """Set the server plain `oca` uses."""
     settings = Settings.load()
     if name not in settings.servers():
-        raise OcaError(f"unknown server {name!r}; see `oca remote`")
+        raise OcaError(f"unknown server {name!r}; see `oca ls`")
     settings.default = name
     settings.save()
     agent.write_config(settings)
@@ -694,56 +810,6 @@ def _up(settings: Settings, name: str, model: str | None, yes: bool) -> str | No
         r.context = conn.context
         settings.save()
     return doing
-
-
-@remote_app.command("up")
-def remote_up(
-    name: NameArg = None,
-    model: ModelArg = None,
-    wait: Annotated[bool, typer.Option("--wait", "-w", help="Wait until it answers.")] = False,
-    yes: Yes = False,
-) -> None:
-    """Start a remote's server, or join a running one, and return.
-
-    Sessions on it wait for it meanwhile.
-    """
-    settings = Settings.load()
-    name = _remote(settings, name)
-    doing = _up(settings, name, model, yes)
-    if wait and doing is not None:
-        began = time.monotonic()
-        with console.status("waiting") as st:
-            remotes.wait_ready(settings, name, st.update)
-        console.print(f"Ready after {(time.monotonic() - began) / 60:.0f} min.")
-        doing = None
-    router.ensure(settings)
-    agent.write_config(settings, titles=doing is None and settings.default == name)
-    how = "plain `oca`" if settings.default == name else f"`oca -r {name}`"
-    if doing is None:
-        console.print(f"{name} answers; {how} uses it.")
-    else:
-        console.print(f"{name}: {doing}. {how} waits for it; `oca remote` shows its state.")
-
-
-@remote_app.command("down")
-def remote_down(name: NameArg = None) -> None:
-    """Stop the server you started there, or leave one you joined."""
-    settings = Settings.load()
-    name = _remote(settings, name)
-    r = settings.remotes[name]
-    if r.kind == "url":
-        raise OcaError(f"{name} is not oca's to stop; `oca remote remove {name}` forgets it")
-    if r.kind == "ucloud":
-        job = cluster.read("serve")
-        cluster.terminate(r, "serve")
-        stopped = None if job is None else job.owner
-    else:
-        stopped = remotes.down(settings, name)
-    agent.write_config(settings)
-    if stopped is None:
-        console.print("Nothing was running.")
-    else:
-        console.print("Stopped." if stopped else "Left; the server keeps running for others.")
 
 
 @remote_app.command("pull")
@@ -809,7 +875,7 @@ def remote_extend(hours: Annotated[int, typer.Argument()] = 1) -> None:
     console.print(f"Extended job {job.job_id} by {hours} h.")
 
 
-@app.command("serve")
+@app.command("serve", rich_help_panel="Servers")
 def serve_cmd(
     model: Annotated[
         str | None, typer.Option(help="Model id (default: the configured one).")
@@ -820,7 +886,7 @@ def serve_cmd(
 ) -> None:
     """Serve this machine's model to other machines' oca over SSH; answers in JSON.
 
-    `oca remote up` on the other machine runs it for you.
+    `oca start <server>` on the other machine runs it for you.
     """
     answer: dict[str, object]
     try:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import tarfile
@@ -467,13 +468,13 @@ def test_router_says_why_a_restart_failed_and_offers_the_rest(
     stop = httpx.post(url, json={**step, "messages": _answered(ask, call, "Stop")}, headers=key)
     said = _events(stop.text)
     assert said[0]["choices"][0]["delta"]["content"].startswith(
-        "↪ oca: spark stays down. `oca remote up spark` restarts it"
+        "↪ oca: spark stays down. `oca start spark` restarts it"
     )
     assert said[-1]["choices"][0]["finish_reason"] == "stop"
     run = httpx.post(url, json={**step, "tools": []}, headers=key).text  # `opencode run`
     assert _events(run)[0]["choices"][0]["delta"]["content"] == (
         "↪ oca: spark is not answering: its server stopped: idle for 60 min, at 14:02. "
-        "`oca remote up spark` restarts it; ctrl+x m picks another server.\n\n"
+        "`oca start spark` restarts it; ctrl+x m picks another server.\n\n"
     )
     title = httpx.post(url, json={**step, "stream": False}, headers=key)
     assert title.status_code == 424 and "not answering" in title.json()["error"]["message"]
@@ -620,6 +621,54 @@ def test_oca_asks_what_to_do_when_its_server_is_down(
     assert cli._ready(s, pick=False) == "spark"  # `oca web`: its sessions ask
     with pytest.raises(OcaError, match="cannot reach"):
         cli._ready(s, yes=True)
+
+
+def test_oca_server_opens_it_and_ls_lists_every_server(
+    monkeypatch: pytest.MonkeyPatch, no_gpu: None
+) -> None:
+    from typer.testing import CliRunner
+
+    from oca import cli
+
+    Settings(remotes={"spark": SPARK}).save()
+    opened: list[Any] = []
+    monkeypatch.setattr(cli, "_ready", lambda settings, name, yes: opened.append(name) or name)
+    monkeypatch.setattr(cli.agent, "launch", opened.append)
+    run = CliRunner().invoke
+    assert run(cli.app, ["spark", "-c"]).exit_code == 0
+    assert opened == ["spark", ["--continue", "--model", "oca/spark"]]
+    wrong = run(cli.app, ["sprak"])
+    assert wrong.exit_code == 2 and "no command or server 'sprak'" in wrong.output
+    assert "oca <server>" in run(cli.app, ["-h"]).output
+    assert "Usage: oca remote add" in run(cli.app, ["remote", "add", "-h"]).output
+    monkeypatch.setattr(cli, "_state", lambda settings, name: "stopped")
+    listed = run(cli.app, ["ls"]).output
+    assert re.search(r"\n +spark +spark \(all users\) +qwen3\.6-35b-a3b +262k +stopped", listed)
+    assert re.search(r"\n \* +local +this machine", listed)  # the default
+    with pytest.raises(OcaError, match="is an oca command"):
+        cli._add(Settings.load(), "ls", "you@box", None, yes=True)
+
+
+def test_ssh_remote_offers_the_biggest_model_that_fits(monkeypatch: pytest.MonkeyPatch) -> None:
+    import typer
+
+    from oca import cli
+
+    assert cli._ssh_model("spark", 128.5, yes=True) == "qwen3.8-flash-next"
+    assert cli._ssh_model("box", 34.2, yes=True) == "qwen3.6-35b-a3b"
+    assert cli._ssh_model("box", 0, yes=True) == config.DEFAULT_MODEL["cpu"]
+    asked: list[str] = []
+    monkeypatch.setattr(typer, "prompt", lambda q, **kw: asked.append(q) or kw["default"])
+    assert cli._ssh_model("spark", 128.5, yes=False) == "qwen3.8-flash-next"
+    assert asked == ["Model for spark (qwen3.8-flash-next/qwen3.6-35b-a3b/qwen3.8-27b)"]
+
+
+def test_a_split_model_downloads_its_first_part_last() -> None:
+    m = config.MODELS["qwen3.8-flash-next"]
+    stem = "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS"
+    assert install.files(m) == [f"{stem}-0000{i}-of-00003.gguf" for i in (2, 3, 1)]
+    assert install.files(config.MODELS["qwen3.6-35b-a3b"]) == ["Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"]
+    assert config.model_path(m).name.endswith("-00001-of-00003.gguf")
 
 
 def test_a_smaller_server_sees_the_latest_turns_that_fit() -> None:
@@ -771,7 +820,7 @@ def test_ssh_remote_probe_and_serve_answers(monkeypatch: pytest.MonkeyPatch) -> 
     from oca import remotes
 
     sent: list[str] = []
-    out = {"text": "aarch64\n@shared\nNVIDIA GB10, [N/A]\n", "code": 0}
+    out = {"text": "aarch64\n@shared\nNVIDIA GB10, [N/A]\n@mem 125513000\n", "code": 0}
 
     def ssh(host: str, command: str, timeout: float = 0) -> subprocess.CompletedProcess[str]:
         sent.append(command)
@@ -781,10 +830,15 @@ def test_ssh_remote_probe_and_serve_answers(monkeypatch: pytest.MonkeyPatch) -> 
     found = remotes.probe("spark")
     assert (found.arch, found.gpu, found.shared, found.personal) == (
         "aarch64",
-        "NVIDIA GB10, [N/A]",
+        "NVIDIA GB10",
         True,
         False,
     )
+    assert round(found.memory) == 129  # its GPU shares the RAM
+    out["text"] = "x86_64\n@personal\nNVIDIA GeForce RTX 5090, 32607 MiB\n@mem 131000000\n"
+    assert round(remotes.probe("box").memory) == 34
+    out["text"] = "x86_64\n@mem 131000000\n"
+    assert remotes.probe("box").memory == 0  # no GPU
     out["text"] = 'a warning\n{"state": "ready", "port": 8181}\n'
     assert remotes.serve_call(SPARK, "--status")["port"] == 8181
     assert "OCA_SHARED=1" in sent[-1] and "/opt/oca/bin/oca serve --status" in sent[-1]
@@ -802,7 +856,7 @@ def test_ssh_remote_probe_and_serve_answers(monkeypatch: pytest.MonkeyPatch) -> 
 def test_ssh_remote_up_tunnels_to_its_server_and_down_stops_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from oca import cluster, remotes
+    from oca import cli, cluster, remotes
 
     calls: list[str] = []
     tunnels: list[list[str]] = []
@@ -828,6 +882,9 @@ def test_ssh_remote_up_tunnels_to_its_server_and_down_stops_it(
     with pytest.raises(Down, match="its server stopped: idle for 60 min, at 14:02"):
         remotes.check(s, "spark")
     assert remotes.read_conn("spark") is None
+    assert cli._state(s, "spark") == "stopped (idle for 60 min, at 14:02)"  # `oca ls`
+    monkeypatch.setattr(remotes, "serve_call", lambda r, args: (_ for _ in ()).throw(OcaError()))
+    assert cli._state(s, "spark") == "not answering"
 
 
 def test_a_stopped_server_says_why(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,11 +3,13 @@
 ## Unreleased
 
 - **Remotes.** `oca remote` replaces `oca cluster`. A remote is UCloud, a machine you reach over SSH (e.g. a DGX Spark) where oca installs itself for you or for all its users, or any OpenAI-compatible URL. Old `cluster_*` settings become the remote `ucloud`, which becomes the default.
-- **A default server, and `oca -r <server>`.** OpenCode lists one model per server; `ctrl+x m` switches.
+- **A default server; `oca <server>` opens another.** `oca ls` lists them all: where each runs, its model and state. OpenCode lists one model per server; `ctrl+x m` switches.
+- **`oca start <server>` and `oca stop <server>`** start or stop any server; alone, this machine's. They replace `oca remote up` and `down`, and return at once: replies on a starting server wait for it, showing its progress (`--wait` blocks).
+- **Qwen3.8-Flash-Next on 128 GB machines** such as a DGX Spark, through llama.cpp (a 94 GB GGUF in three parts). Adding a machine over SSH offers the biggest model that fits its GPU.
+- `-h` shows help, like `--help`. Questions with fixed answers list them and ask again after a wrong one.
 - **When a server is down, oca asks** in OpenCode's menu, saying why: restart it, use another server, or stop. It never switches by itself. A server used instead serves until the session's own answers again; a smaller one sees the latest messages.
 - **`oca serve`** serves this machine's model to other machines' oca, which run it over SSH; it stops when idle and records why it stopped.
 - OpenCode now keeps a quarter of a model's context for the reply, not half: a 64k model had 32k for the conversation.
-- **`oca remote up` returns at once.** Replies on that server wait for it, showing its progress; `--wait` blocks as before.
 - Unattended runs (`oca run -- run`) cannot ask questions, which nobody would answer.
 - **`oca web stop`** replaces `oca web --stop`.
 - **`oca sessions --clear`** deletes the sessions started in this folder or below.
