@@ -274,7 +274,7 @@ def start(
         if key := cluster.unregistered_key():
             raise OcaError(
                 "UCloud does not know this machine's SSH key, so the tunnel would fail. "
-                f"Register it once: `oca ucloud ssh-keys add {key} --title $(hostname)`"
+                f"Register it once: `oca ucloud-api ssh-keys add {key} --title $(hostname)`"
             )
         if shared := cluster.join(r, m):
             job, starter = shared

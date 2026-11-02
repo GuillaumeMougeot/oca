@@ -1,6 +1,6 @@
 # Roadmap
 
-**Last updated:** 2026-11-01
+**Last updated:** 2026-11-02
 
 ## Architecture
 
@@ -33,7 +33,7 @@
 
 1. `install.sh` installs uv if it's missing, then `uv tool install` oca, then runs `oca setup` (binaries, about 1 GB).
 2. The first `oca` repairs anything missing and asks before the model download.
-3. The cluster is optional: `oca ucloud login`, then `oca cluster up`.
+3. Remotes are optional: `oca remote add` for UCloud (after `oca ucloud-api login`), a machine over SSH or a URL.
 
 ## Phases
 
@@ -52,4 +52,6 @@
    - v0.1.0 tagged 2026-10-30 ([changelog](CHANGELOG.md)).
 6. **Production hardening.** Done 2026-10-30, v0.2.0: keys on every server, private files, releases with `oca update`, log rotation, `oca sessions` ([journal](docs/journal/2026-10-30-security.md)).
 7. **Remotes.** Built 2026-11-01 on branch `remotes`: `oca remote` for UCloud, a machine over SSH (installed for one user or all), or a URL; a default server, `oca <server>` and `oca ls`; when a server is down, a menu in OpenCode offers to restart it or use another. Checked end to end through a stand-in `ssh`, and the menu in OpenCode against fake servers; the DGX Spark test is next ([journal](docs/journal/2026-11-01-remotes.md)).
-8. **Phone without Termux.** On hold since 2026-11-01: a Telegram bridge to OpenCode's server, not OpenClaw, but its servers would see the messages ([journal](docs/journal/2026-11-01-phone-chat.md)).
+8. **Phone without Termux.** Reopened 2026-11-02, through no server but the user's own. Proposed: a Matrix server on the user's VPS, its phone app, and an `oca matrix` bot driving OpenCode's server; Telegram is out, since its servers would see the messages ([journal](docs/journal/2026-11-01-phone-chat.md)).
+9. **Agent teams.** Idea, 2026-11-02, like Claude Code's multi-agent modes: a lead agent on the strongest server hands parts of a task to helpers on other servers, such as a Spark or this machine. OpenCode's subagents can each use their own model, and every oca server is one, so a first version is configuration: helper agents bound to `oca/<server>`. To check: whether OpenCode runs helpers in parallel, and whether small models make useful helpers. A council, where several models answer and one judges, would need oca's own code.
+10. **CLI review.** 2026-11-02: one bug fixed (`oca ucloud` clashed with the server named ucloud); renames and one rule for server arguments proposed, to settle before `remotes` is merged ([journal](docs/journal/2026-11-02-cli-review.md)).

@@ -6,6 +6,7 @@
 - **A default server; `oca <server>` opens another.** `oca ls` lists them all: where each runs, its model and state. OpenCode lists one model per server; `ctrl+x m` switches.
 - **`oca start <server>` and `oca stop <server>`** start or stop any server; alone, this machine's. They replace `oca remote up` and `down`, and return at once: replies on a starting server wait for it, showing its progress (`--wait` blocks).
 - **Qwen3.8-Flash-Next on 128 GB machines** such as a DGX Spark, through llama.cpp (a 94 GB GGUF in three parts). Adding a machine over SSH offers the biggest model that fits its GPU.
+- **`oca ucloud-api`** replaces `oca ucloud` for the bundled UCloud tool, so that `oca ucloud` opens the server named ucloud.
 - `-h` shows help, like `--help`. Questions with fixed answers list them and ask again after a wrong one.
 - **When a server is down, oca asks** in OpenCode's menu, saying why: restart it, use another server, or stop. It never switches by itself. A server used instead serves until the session's own answers again; a smaller one sees the latest messages.
 - **`oca serve`** serves this machine's model to other machines' oca, which run it over SSH; it stops when idle and records why it stopped.

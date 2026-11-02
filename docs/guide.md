@@ -89,8 +89,8 @@ It then asks which model to serve, offering the biggest that fits the machine's 
 ### UCloud
 
 Once per person:
-1. **Log in.** Open cloud.sdu.dk in a browser, then DevTools → Application → Cookies, and copy `refreshToken`. Run `oca ucloud login --project <id>`; `oca ucloud projects` lists your projects.
-2. **Register an SSH key.** Run `oca ucloud ssh-keys add ~/.ssh/id_ed25519.pub --title $(hostname)`, after `ssh-keygen -t ed25519` if you have no key. A server only accepts keys registered before it started.
+1. **Log in.** Open cloud.sdu.dk in a browser, then DevTools → Application → Cookies, and copy `refreshToken`. Run `oca ucloud-api login --project <id>`; `oca ucloud-api projects` lists your projects.
+2. **Register an SSH key.** Run `oca ucloud-api ssh-keys add ~/.ssh/id_ed25519.pub --title $(hostname)`, after `ssh-keygen -t ed25519` if you have no key. A server only accepts keys registered before it started.
 3. **Add it.** `oca remote add ucloud ucloud` lists your drives and asks which one holds the weights and job files.
 
 Once per project, download the weights: `oca remote pull ucloud [model]`. This runs a CPU job that takes a few minutes and uses no GPU-hours. `oca start ucloud` shows a server's GPU-hour cap before starting it; `oca remote extend 2` adds 2 h (starter only).

@@ -509,11 +509,12 @@ def config(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     add_help_option=False,
 )
-def ucloud(ctx: typer.Context) -> None:
-    """The bundled ucloud-api CLI, e.g. `oca ucloud login` or `oca ucloud jobs list`."""
+def ucloud_api(ctx: typer.Context) -> None:
+    """The bundled ucloud-api CLI, e.g. `oca ucloud-api login` or `oca ucloud-api jobs list`."""
     from ucloud_api.cli import app as ucloud_app
 
-    ucloud_app(args=ctx.args, prog_name="oca ucloud")
+    args = ["--help" if a == "-h" else a for a in ctx.args]  # ucloud-api knows only --help
+    ucloud_app(args=args, prog_name="oca ucloud-api")
 
 
 @app.command(rich_help_panel="Setup")
@@ -649,7 +650,7 @@ def _commands() -> set[str]:
 def _new_ucloud(settings: Settings, model: str | None, port: int) -> Remote:
     if any(r.kind == "ucloud" for r in settings.remotes.values()):
         raise OcaError("oca drives one UCloud remote; `oca remote` lists it")
-    drives = cluster.drives()  # needs `oca ucloud login`
+    drives = cluster.drives()  # needs `oca ucloud-api login`
     table = Table("drive", "title", box=None)
     for d in drives:
         table.add_row(f"/{d.id}", d.title)

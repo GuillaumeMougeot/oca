@@ -239,7 +239,7 @@ def _client() -> Iterator[UCloudClient]:
         with UCloudClient() as client:
             yield client
     except (AuthError, ConfigError) as e:
-        raise OcaError(f"{e}\nLog in with `oca ucloud login`.") from e
+        raise OcaError(f"{e}\nLog in with `oca ucloud-api login`.") from e
 
 
 def _drive(remote: Remote) -> str:
@@ -538,8 +538,9 @@ def ensure_tunnel(remote: Remote, job: Job, timeout: float = 300) -> None:
     except OcaError as e:
         if "Permission denied" in str(e):
             raise OcaError(
-                "UCloud rejected this machine's SSH key. Register it once (`oca ucloud ssh-keys "
-                "add ~/.ssh/<key>.pub`); a job only learns the keys registered before it started."
+                "UCloud rejected this machine's SSH key. Register it once (`oca ucloud-api "
+                "ssh-keys add ~/.ssh/<key>.pub`); a job only learns the keys registered before "
+                "it started."
             ) from e
         raise
     _write(job, job.kind)

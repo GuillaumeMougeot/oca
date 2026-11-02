@@ -647,6 +647,8 @@ def test_oca_server_opens_it_and_ls_lists_every_server(
     assert re.search(r"\n \* +local +this machine", listed)  # the default
     with pytest.raises(OcaError, match="is an oca command"):
         cli._add(Settings.load(), "ls", "you@box", None, yes=True)
+    assert "ucloud-api" in cli._commands() and "ucloud" not in cli._commands()  # a server name
+    assert "Usage: oca ucloud-api" in run(cli.app, ["ucloud-api", "-h"]).output
 
 
 def test_ssh_remote_offers_the_biggest_model_that_fits(monkeypatch: pytest.MonkeyPatch) -> None:

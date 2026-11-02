@@ -29,7 +29,7 @@ Goal: installing it is as easy as uv or Claude Code, plus one model download. oc
 - Keep the agent permission rules in `agent.py`. Without them, a local model ran `pip install --break-system-packages` on the host ([journal](docs/journal/2026-10-29-local-mvp.md)).
 - UCloud:
   - Ask before spending GPU-hours or core-hours. Use the smallest product that does the job.
-  - Storage quota is per project: check `oca ucloud quota` before pulling weights.
+  - Storage quota is per project: check `oca ucloud-api quota` before pulling weights.
   - Every project member's registered SSH key can log into SSH-enabled jobs.
   - `nproc` in a job counts the host's CPUs, not the product's: size thread pools from the product.
   - Read job logs, not job status.
