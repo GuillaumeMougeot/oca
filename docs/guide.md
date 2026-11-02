@@ -13,6 +13,8 @@ curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.s
 
 `oca update` installs the newest release. For the latest unreleased code: `OCA_SOURCE=git+https://github.com/GuillaumeMougeot/oca sh install.sh`.
 
+**Tab completion:** run `oca --install-completion` once, then open a new terminal: Tab completes commands, ids (`oca fl` Tab) and server names.
+
 ## Daily use
 
 - **`oca`**, in a project, opens OpenCode on the default server. The first run asks which servers to use besides this machine, and offers to download the local model, 23 GB for CPU.
@@ -24,7 +26,7 @@ OpenCode lists one model per server: `oca/local` and one per remote; `ctrl+x m` 
 
 **When a server is down,** oca never switches by itself. It asks in a menu, in OpenCode (↑↓ and Enter), saying why the server is down: restart it, use another server, or stop. If the restart fails, it says why and asks again. While a server starts, the reply shows its progress. A server used instead serves until the session's own server answers again, and says so in one line. If its context window is smaller, it sees only the latest messages; the session keeps its whole history. Launched while its server is down, `oca` asks the same in the terminal.
 
-**Sessions:** `oca sessions` lists this folder's sessions; `oca sessions --delete <id>` deletes one, and `oca sessions --clear` all those started in this folder or below. `oca -c` reopens the last session, and `oca -r <id>` a given one, as in Claude Code. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles when a remote answers at launch; the local CPU model skips them, since a title costs 40 to 80 s there.
+**Sessions:** `oca sessions` lists this folder's sessions; `oca sessions rm <id>` deletes one, and `oca sessions clear` all those started in this folder or below. `oca -c` reopens the last session, and `oca -r <id>` a given one, as in Claude Code. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles when a remote answers at launch; the local CPU model skips them, since a title costs 40 to 80 s there.
 
 **Effort:** `ctrl+t` in OpenCode cycles the model's variants: `none`, `low`, `medium`, `high`, `max`. Without a variant, each model uses its default. For one task: `oca run --variant low "…"`.
 - `none` turns thinking off: fastest, but weakest.
@@ -61,13 +63,14 @@ Besides this machine (`local`), oca uses other servers: UCloud, a machine you re
 
 | Command | Does |
 |---|---|
-| `oca ls` | every server, and under it each model with its id, context and state; `*` marks the default |
+| `oca ls` | every server, and under it each model with its id and context; `*` marks the default. The model a server serves, or would start with, shows the server's state (ready, loading, down, stopped and why, or started by a project member); the others say whether they are downloaded there, or nothing where that is unknown |
 | `oca <id>` | open OpenCode on that model, starting its server; another model on a running server restarts it, after asking |
 | `oca stop [id or server]` | stop the server you started, or leave one you joined; `--all` stops every one, and oca's endpoint |
 | `oca logs [id or server] -f`, `oca pull [id]` | its log; download its model ahead of time |
 | `oca config default <id>` | what plain `oca` opens |
 | `oca server add <name> <target>` | add one: `ucloud`, `you@host`, or a URL |
 | `oca server set <name> idle 30` | change a setting: `idle`, `hours`, `model`, `port`, `context` |
+| `oca server update <name>` | reinstall oca on a machine over SSH; `OCA_SOURCE` picks the version, as for install.sh |
 | `oca server rm <name>` | forget it |
 
 Without an id, a command acts on the default. When its server is down, plain `oca` offers to restart it, or another server.
@@ -105,7 +108,7 @@ Once per project, download the weights: `oca pull flash-next@ucloud`. This runs 
 
 **Cost and timeouts:** a server stops after `idle` minutes without requests (default 60), and a job runs at most `hours` (default 8): `oca server set ucloud idle 30`. Queue time is free. A server shared by several people costs the same as one.
 
-**Sharing:** everyone in the project using the same drive shares servers: `oca <id>` joins a running server instead of starting another. Project members' SSH keys also give them a shell in the job, so share servers only within a trusted project.
+**Sharing:** everyone in the project using the same drive shares servers: `oca ls` shows a server a member started, and `oca <id>` joins it instead of starting another. Project members' SSH keys also give them a shell in the job, so share servers only within a trusted project.
 
 ## Phone and other machines
 

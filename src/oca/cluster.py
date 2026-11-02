@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from .config import (
+    CLUSTER_MODELS,
     VLLM_VERSION,
     ClusterModel,
     Down,
@@ -335,7 +336,7 @@ def weights_ready(remote: Remote, model: ClusterModel) -> bool:
     from ucloud_api import Files
 
     with _client() as client:
-        return Files(client).stat(f"{_drive(remote)}/hf/{model.repo}/{MARKER}") is not None
+        return Files(client).stat(_weights(remote, model)) is not None
 
 
 def pull(remote: Remote, model: ClusterModel) -> Job:
@@ -390,6 +391,37 @@ def join(remote: Remote, model: ClusterModel) -> tuple[Job, str] | None:
                 return None
     _write(job, "serve")
     return job, str(entry.get("started_by", "another member"))
+
+
+def listed(remote: Remote) -> dict[str, str]:
+    """Who started each server that members listed on the drive and that still runs, by
+    model; read only, unlike `join`."""
+    from ucloud_api import Files, Jobs, Transfer
+    from ucloud_api.exceptions import APIError, UCloudError
+
+    found = {}
+    with _client() as client, suppress(UCloudError):
+        for item in Files(client).list_path(f"{_drive(remote)}/oca/servers"):
+            with suppress(UCloudError, ValueError, KeyError):
+                entry = json.loads(Transfer(client).read_bytes(item.path))
+                with suppress(APIError):  # members may not see each other's jobs
+                    if Jobs(client).state(entry["job_id"]).is_terminal:
+                        continue
+                found[entry["model"]] = str(entry.get("started_by", "another member"))
+    return found
+
+
+def downloaded(remote: Remote) -> set[str]:
+    """The models whose weights are on the drive."""
+    from ucloud_api import Files
+
+    with _client() as client:
+        stat = Files(client).stat
+        return {m.id for m in CLUSTER_MODELS.values() if stat(_weights(remote, m)) is not None}
+
+
+def _weights(remote: Remote, model: ClusterModel) -> str:
+    return f"{_drive(remote)}/hf/{model.repo}/{MARKER}"
 
 
 def _unlist(remote: Remote, job: Job) -> None:

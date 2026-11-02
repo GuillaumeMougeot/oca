@@ -24,6 +24,7 @@ import httpx
 
 from . import install, server
 from .config import (
+    MODELS,
     OcaError,
     Settings,
     data_dir,
@@ -63,11 +64,14 @@ def _set(**fields: Any) -> None:
 
 
 def status() -> dict[str, Any]:
+    """What this machine serves, and which models it has downloaded (for `oca ls`)."""
     entry = _read()
+    have = [m.id for m in MODELS.values() if model_path(m).exists()]
     if not process_alive(int(entry.get("pid", 0)), "oca.serve"):
-        return {"state": "stopped", "why": entry.get("why", "")}
+        return {"state": "stopped", "why": entry.get("why", ""), "downloaded": have}
     return {
         **{k: entry[k] for k in ("state", "model", "context", "started_by")},
+        "downloaded": have,
         "port": server.port(Settings.load()),
         "key": secret("api-key"),  # llama-server's; readable by this install's users
         "mine": entry["started_by"] == getpass.getuser(),

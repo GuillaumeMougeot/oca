@@ -9,6 +9,10 @@
 - **`oca server add|rm|set|extend`** replaces `oca remote`. `oca stop`, `oca logs` and `oca pull` take an id or a server, and act on the default without one; `oca stop --all` stops everything. `oca start` and `oca models` are gone: `oca <id>` starts what it opens, and `oca ls` lists the models.
 - **`oca --version`**; errors go to stderr; `oca serve` and `oca setup`, which oca runs for you, are out of the help.
 - **Qwen3.8-Flash-Next on 128 GB machines** such as a DGX Spark, through llama.cpp (a 94 GB GGUF in three parts). Adding a machine over SSH offers the biggest model that fits its GPU.
+- **`oca ls` says, for each model, whether it is downloaded on its server,** and shows a UCloud server that a project member started; opening it joins it (before, oca said "no server started").
+- **Tab completion:** `oca --install-completion` once; Tab completes commands, ids and server names.
+- **`oca sessions rm <id>` and `oca sessions clear`** replace `--delete` and `--clear`.
+- **`oca server update <name>`** reinstalls oca on a machine over SSH.
 - `-h` shows help, like `--help`. Questions with fixed answers list them and ask again after a wrong one.
 - **When a server is down, oca asks** in OpenCode's menu, saying why: restart it, use another server, or stop. It never switches by itself. A server used instead serves until the session's own answers again; a smaller one sees the latest messages.
 - **`oca serve`** serves this machine's model to other machines' oca, which run it over SSH; it stops when idle and records why it stopped.

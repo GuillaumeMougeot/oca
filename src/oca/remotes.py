@@ -297,8 +297,11 @@ def check(settings: Settings, name: str) -> str | None:
     r = settings.remotes[name]
     if r.kind == "ucloud":
         job = cluster.read("serve")
-        if job is None:
-            raise Down("no server started")
+        if job is None:  # a project member may run it: join that
+            shared = cluster.join(r, CLUSTER_MODELS[r.model])
+            if shared is None:
+                raise Down("no server started")
+            job = shared[0]
         return cluster.check(r, job)
     if r.kind == "url":
         b = backend(settings, name)
@@ -355,8 +358,8 @@ def start(
     if job is None:
         if m.size_gb > 100 and not cluster.weights_ready(r, m):
             raise OcaError(
-                f"{m.id} ({m.size_gb:g} GB) is not on the drive yet. Run `oca remote pull "
-                f"{name} {m.id}` first, so the download does not spend GPU-hours."
+                f"{m.id} ({m.size_gb:g} GB) is not on the drive yet. Run `oca pull "
+                f"{pair_id(settings, name, m.id)}` first, so the download spends no GPU-hours."
             )
         confirm(
             f"Serve {m.id} on {m.gpus}x B200 for up to {r.hours} h ({m.gpus * r.hours} "

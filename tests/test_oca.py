@@ -657,19 +657,97 @@ def test_oca_id_opens_that_model_and_ls_lists_every_pair(
     assert "Usage: oca server add" in run(cli.app, ["server", "add", "-h"]).output
     assert "Usage: oca ucloud" in run(cli.app, ["ucloud", "-h"]).output  # a command, not a pair
     assert run(cli.app, ["-V"]).output.startswith("oca ")
-    monkeypatch.setattr(cli, "_state", lambda settings, name: ("stopped", None))
+    now = {
+        "local": ("stopped", None, {"qwen3.8-27b"}),
+        "spark": ("ready", "qwen3.6-35b-a3b", None),  # an older oca: downloads unknown
+        "ucloud": ("down", None, {"deepseek-v4.1-flash", "qwen3.8-27b-fp8"}),
+    }
+    monkeypatch.setattr(cli, "_state", lambda settings, name: now[name])
     listed = run(cli.app, ["ls"]).output
     assert listed.startswith("local: this machine (cpu)\n * qwen3.6@local ")  # the default
-    assert re.search(r"\n   qwen3\.8-27b@local +qwen3\.8-27b +65k  not downloaded\n", listed)
-    assert "\nspark: spark over SSH, for all its users\n   qwen3.6@spark " in listed
-    assert re.search(
-        r"\n   deepseek@ucloud +deepseek-v4\.1-flash, 2 B200s +262k  stopped\n", listed
-    )
-    assert re.search(r"\n   flash-next@ucloud +qwen3\.8-flash-next, 1 B200 +262k\n", listed)
+    assert re.search(r"qwen3\.6@local +qwen3\.6-35b-a3b +262k  not downloaded\n", listed)
+    assert re.search(r"\n   qwen3\.8-27b@local +qwen3\.8-27b +65k  downloaded\n", listed)
+    assert "\nspark: spark over SSH, for all its users\n" in listed
+    assert re.search(r"\n   qwen3\.6@spark +qwen3\.6-35b-a3b +262k  ready\n", listed)
+    assert re.search(r"\n   flash-next@spark +qwen3\.8-flash-next +262k\n", listed)  # unknown
+    assert re.search(r"\n   deepseek@ucloud +deepseek-v4\.1-flash, 2 B200s +262k  down\n", listed)
+    assert re.search(r"\n   qwen3\.8-27b@ucloud .* 262k  downloaded\n", listed)
+    assert re.search(r"\n   flash-next@ucloud .* 262k  not downloaded\n", listed)
     assert "flash-next@local" not in listed  # 64 GB: it does not fit
     assert run(cli.app, ["config", "default", "deep"]).exit_code == 0
     assert Settings.load().default == "deepseek@ucloud"
     assert "\ndefault = 'deepseek@ucloud'\n" in run(cli.app, ["config"]).output
+
+
+def test_a_members_ucloud_server_is_listed_and_opening_it_joins_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from oca import cli, cluster, remotes
+
+    s = Settings(remotes={"ucloud": replace(UCLOUD, model="qwen3.8-flash-next")})
+    monkeypatch.setattr(cluster, "read", lambda kind: None)  # nothing started or joined here
+    monkeypatch.setattr(cluster, "downloaded", lambda r: {"qwen3.8-flash-next"})
+    monkeypatch.setattr(cluster, "listed", lambda r: {"qwen3.8-flash-next": "bob@ws1"})
+    on_drive = {"qwen3.8-flash-next"}
+    assert cli._state(s, "ucloud") == ("started by bob@ws1", "qwen3.8-flash-next", on_drive)
+    job = cluster.Job("serve", "42", "qwen3.8-flash-next", "t")
+    monkeypatch.setattr(cluster, "join", lambda r, m: (job, "bob@ws1"))
+    monkeypatch.setattr(cluster, "check", lambda r, j: None if j is job else "?")
+    assert remotes.check(s, "ucloud") is None  # opening it joins bob's server
+    monkeypatch.setattr(cluster, "join", lambda r, m: None)
+    with pytest.raises(Down, match="no server started"):
+        remotes.check(s, "ucloud")
+
+
+def test_serve_says_which_models_are_downloaded() -> None:
+    from oca import serve
+
+    path = config.model_path(config.MODELS["qwen3.8-27b"])
+    path.parent.mkdir(parents=True)
+    path.touch()
+    assert serve.status()["downloaded"] == ["qwen3.8-27b"]  # for `oca ls` on other machines
+
+
+def test_tab_completes_commands_and_ids(monkeypatch: pytest.MonkeyPatch, no_gpu: None) -> None:
+    import typer
+
+    from oca import cli, remotes
+
+    monkeypatch.setattr(remotes, "memory_gb", lambda gpu: 64.0)
+    Settings(remotes={"spark": SPARK}).save()
+    assert cli._complete_ids("qwen3.6") == ["qwen3.6@local", "qwen3.6@spark"]
+    assert cli._complete_servers("sp") == ["spark"]
+    group = typer.main.get_command(cli.app)
+    ctx = group.make_context("oca", [], resilient_parsing=True)
+    first = [c.value for c in group.shell_complete(ctx, "s")]
+    assert {"server", "sessions", "stop", "status"} <= set(first)
+    assert [c.value for c in group.shell_complete(ctx, "qwen3.8")] == [
+        "qwen3.8-27b@local",
+        "qwen3.8-27b@spark",
+    ]
+
+
+def test_sessions_and_server_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from oca import cli, remotes
+
+    Settings(remotes={"spark": SPARK}).save()
+    ran: list[list[str]] = []
+    monkeypatch.setattr(cli.agent, "launch", ran.append)
+    run = CliRunner().invoke
+    run(cli.app, ["sessions"])
+    run(cli.app, ["sessions", "rm", "ses_1"])
+    assert ran == [["session", "list"], ["session", "delete", "ses_1"]]
+    monkeypatch.setattr(cli.agent, "sessions_in", lambda folder: ["a", "b"])
+    deleted: list[str] = []
+    monkeypatch.setattr(cli.agent, "opencode", lambda args: deleted.append(args[-1]) or "")
+    assert "Deleted 2 sessions." in run(cli.app, ["sessions", "clear", "-y"]).output
+    assert deleted == ["a", "b"]
+    installs: list[tuple[str, str]] = []
+    monkeypatch.setattr(remotes, "install", lambda host, shared: installs.append((host, shared)))
+    assert run(cli.app, ["server", "update", "spark"]).exit_code == 0
+    assert installs == [("spark", "/opt/oca")]  # its install for all users, again
 
 
 def test_pairs_name_each_model_on_each_server(
@@ -966,9 +1044,9 @@ def test_ssh_remote_up_tunnels_to_its_server_and_down_stops_it(
     with pytest.raises(Down, match="its server stopped: idle for 60 min, at 14:02"):
         remotes.check(s, "spark")
     assert remotes.read_conn("spark") is None
-    assert cli._state(s, "spark") == ("stopped (idle for 60 min, at 14:02)", None)  # `oca ls`
+    assert cli._state(s, "spark") == ("stopped (idle for 60 min, at 14:02)", None, None)
     monkeypatch.setattr(remotes, "serve_call", lambda r, args: (_ for _ in ()).throw(OcaError()))
-    assert cli._state(s, "spark") == ("not answering", None)
+    assert cli._state(s, "spark") == ("not answering", None, None)
 
 
 def test_a_stopped_server_says_why(monkeypatch: pytest.MonkeyPatch) -> None:

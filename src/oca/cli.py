@@ -44,6 +44,19 @@ from .remotes import Choice, Pair
 VALUED = ("-r", "--resume", "-m", "--model")  # options of plain `oca` that take a value
 
 
+def _complete_ids(incomplete: str) -> list[str]:
+    """Tab completion: the ids `oca ls` lists that start with what is typed."""
+    with suppress(Exception):  # a broken setting must not break the shell
+        return [p.id for p in remotes.pairs(Settings.load()) if p.id.startswith(incomplete)]
+    return []
+
+
+def _complete_servers(incomplete: str) -> list[str]:
+    with suppress(Exception):
+        return [n for n in Settings.load().remotes if n.startswith(incomplete)]
+    return []
+
+
 class _Oca(TyperGroup):
     """`oca <id>` opens that pair, as `oca -m <id>` does."""
 
@@ -55,13 +68,21 @@ class _Oca(TyperGroup):
             args = [*args[:i], "--model", *args[i:]]
         return super().parse_args(ctx, args)
 
+    def shell_complete(self, ctx: Any, incomplete: str) -> list[Any]:
+        """The first word completes to a command or an id."""
+        from typer._click.shell_completion import CompletionItem  # typer bundles its click
+
+        found = super().shell_complete(ctx, incomplete)
+        if not incomplete.startswith("-"):
+            found += [CompletionItem(i) for i in _complete_ids(incomplete)]
+        return found
+
 
 app = typer.Typer(
     cls=_Oca,
     name="oca",
     help="Open Coding Agent. `oca` opens OpenCode on the default model, `oca <id>` on another: "
     "`oca ls` lists them, each a model on a server, such as flash-next@spark2.",
-    add_completion=False,
     invoke_without_command=True,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
@@ -71,16 +92,26 @@ server_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(server_app, name="server", rich_help_panel="Servers")
+sessions_app = typer.Typer(help="List this folder's sessions, or delete them.")
+app.add_typer(sessions_app, name="sessions", rich_help_panel="Sessions")
 web_app = typer.Typer(help="OpenCode in a browser for this folder, e.g. on a phone.")
 app.add_typer(web_app, name="web", rich_help_panel="Sessions")
 console = Console()
 Yes = Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")]
 Target = Annotated[
-    str | None, typer.Argument(help="An id from `oca ls`, or part of one (default: the default).")
+    str | None,
+    typer.Argument(
+        help="An id from `oca ls`, or part of one (default: the default).",
+        autocompletion=_complete_ids,
+    ),
 ]
 ModelOpt = Annotated[
-    str | None, typer.Option("--model", "-m", help="An id from `oca ls`, or part of one.")
+    str | None,
+    typer.Option(
+        "--model", "-m", help="An id from `oca ls`, or part of one.", autocompletion=_complete_ids
+    ),
 ]
+ServerName = Annotated[str, typer.Argument(help="Its name.", autocompletion=_complete_servers)]
 
 
 def _confirm(yes: bool, question: str, default: bool = True) -> None:
@@ -322,15 +353,22 @@ def run(ctx: typer.Context, model: ModelOpt = None, yes: Yes = False) -> None:
     agent.launch(["run", *ctx.args, "--model", f"{agent.PROVIDER}/{name}"])
 
 
-@app.command(rich_help_panel="Sessions")
-def sessions(
-    delete: Annotated[str | None, typer.Option("--delete", help="Delete this session.")] = None,
-    clear: Annotated[bool, typer.Option("--clear", help="Delete this folder's sessions.")] = False,
-    yes: Yes = False,
-) -> None:
-    """List this folder's sessions (resume one with `oca -r <id>`), or delete them."""
-    if not clear:
-        agent.launch(["session", "delete", delete] if delete else ["session", "list"])
+@sessions_app.callback(invoke_without_command=True)
+def sessions_list(ctx: typer.Context) -> None:
+    """List this folder's sessions; `oca -r <id>` resumes one."""
+    if ctx.invoked_subcommand is None:
+        agent.launch(["session", "list"])
+
+
+@sessions_app.command("rm")
+def sessions_rm(session: Annotated[str, typer.Argument(help="Its id; `oca sessions`.")]) -> None:
+    """Delete a session."""
+    agent.launch(["session", "delete", session])
+
+
+@sessions_app.command("clear")
+def sessions_clear(yes: Yes = False) -> None:
+    """Delete the sessions started in this folder or below."""
     ids = agent.sessions_in(Path.cwd())
     if not ids:
         console.print("No sessions started in this folder.")
@@ -383,14 +421,23 @@ def ls() -> None:
     for name in names:  # a line per server, then one per model: fits 80 columns
         console.print(f"[bold]{escape(name)}[/]: {escape(_where(settings, name))}")
         for p in (p for p in every if p.server == name):
-            state, serving = states[name]
-            if name == "local" and not model_path(MODELS[p.model]).exists():
-                state = "not downloaded"
-            elif p.model != (serving or settings.model_of(name)):
-                state = ""  # the server serves another model
             mark = "*" if p.id == default else " "
+            state = _row(states[name], p.model, settings.model_of(name))
             row = f" {mark} {p.id:<{wide[0]}}  {models[p.id]:<{wide[1]}}  {p.context // 1000:>3}k"
             console.print(escape(f"{row}  {state}".rstrip()), highlight=False)
+
+
+def _row(now: tuple[str, str | None, set[str] | None], model: str, chosen: str) -> str:
+    """A model's line in `oca ls`: the server's state if it serves the model, or would start
+    with it; else whether the model is downloaded there (blank if unknown)."""
+    state, serving, have = now
+    if model == serving:
+        return state
+    if have is not None and model not in have:
+        return "not downloaded"
+    if serving is None and model == chosen:
+        return state
+    return "" if have is None else "downloaded"
     console.print(
         "`oca <id>` opens one, and part of an id will do; plain `oca` opens the default, *. "
         "A server serves one model at a time."
@@ -412,40 +459,56 @@ def _model(settings: Settings, p: Pair) -> str:
     return p.model
 
 
-def _state(settings: Settings, name: str) -> tuple[str, str | None]:
-    """What server ``name`` is doing, and the model it serves if any. A machine over SSH is
-    asked, since it may have stopped."""
+def _state(settings: Settings, name: str) -> tuple[str, str | None, set[str] | None]:
+    """What server ``name`` is doing, the model it serves if any, and the models it has
+    downloaded (None if unknown). Its machine is asked: it may have stopped, or a project
+    member may have started it."""
     if name == "local":
+        have = {m.id for m in MODELS.values() if model_path(m).exists()}
         st = server.read_state()
         if st is None:
-            return "stopped", None
+            return "stopped", None, have
         path = st.cmd[st.cmd.index("--model") + 1] if "--model" in st.cmd else ""
         now = next((m.id for m in MODELS.values() if str(model_path(m)) == path), None)
-        return ("ready" if server.healthy(st.port) else "loading"), now
+        return ("ready" if server.healthy(st.port) else "loading"), now, have
     r, found = settings.remotes[name], remotes.backend(settings, name)
-    if found is not None and remotes.healthy(found):
-        return "ready", found.model
     if r.kind == "url":
-        return "not answering", None
+        return ("ready" if found and remotes.healthy(found) else "not answering"), r.model, None
     if r.kind == "ssh":
         try:
             told = remotes.serve_call(r, "--status")
         except OcaError:
-            return "not answering", None
-        state = str(told.get("state")) + (f" ({told['why']})" if told.get("why") else "")
-        return state, None if told.get("state") == "stopped" else told.get("model")
+            return "not answering", None, None
+        there = set(told["downloaded"]) if "downloaded" in told else None  # older oca: unknown
+        if told.get("state") == "stopped":
+            return "stopped" + (f" ({told['why']})" if told.get("why") else ""), None, there
+        state = str(told.get("state"))
+        if not told.get("mine") and told.get("started_by"):
+            state += f", started by {told['started_by']}"
+        return state, told.get("model"), there
+    on_drive: set[str] | None = None
+    with suppress(OcaError, OSError):
+        on_drive = cluster.downloaded(r)
     job = cluster.read("serve")
-    if job is None:
-        return "down", None
+    if job is None:  # nothing joined from here; a project member may have started one
+        running: dict[str, str] = {}
+        with suppress(OcaError, OSError):
+            running = cluster.listed(r)
+        if not running:
+            return "down", None, on_drive
+        model = r.model if r.model in running else next(iter(running))
+        return f"started by {running[model]}", model, on_drive
+    if found is not None and remotes.healthy(found):
+        return "ready", job.model, on_drive
     try:
         status = cluster.job_status(job)
     except OcaError:
-        return "starting", job.model
+        return "starting", job.model, on_drive
     state = str(status.get("state", "starting")).lower().replace("_", " ")
     expires = status.get("expiresAt")
     if isinstance(expires, int | float):
         state += f", {(expires / 1000 - time.time()) / 3600:.1f} h left"
-    return state, job.model
+    return state, job.model, on_drive
 
 
 @app.command(rich_help_panel="Servers")
@@ -565,7 +628,7 @@ def server_add(
 
 
 @server_app.command("rm")
-def server_rm(name: Annotated[str, typer.Argument(help="Its name.")]) -> None:
+def server_rm(name: ServerName) -> None:
     """Forget a server; stops the one you started there."""
     settings = Settings.load()
     r = settings.remotes[_remote(settings, name)]
@@ -587,7 +650,7 @@ SETTABLE = ("idle", "hours", "model", "port", "context", "key")
 
 @server_app.command("set")
 def server_set(
-    name: Annotated[str, typer.Argument(help="Its name.")],
+    name: ServerName,
     key: Annotated[str, typer.Argument(help=", ".join(SETTABLE))],
     value: Annotated[str, typer.Argument(help="Its new value.")],
 ) -> None:
@@ -605,6 +668,19 @@ def server_set(
     settings.save()
     agent.write_config(settings)
     console.print(f"{name} {key} = {getattr(r, key)!r}. Applies to the next server you start.")
+
+
+@server_app.command("update")
+def server_update(name: ServerName) -> None:
+    """Reinstall oca on a machine over SSH, for you or for all its users, at the version this
+    oca installs (`OCA_SOURCE`, as for install.sh, picks another)."""
+    settings = Settings.load()
+    r = settings.remotes[_remote(settings, name)]
+    if r.kind != "ssh":
+        raise OcaError(f"{name} is not a machine oca installs itself on")
+    with console.status(f"Updating oca on {r.host}; this takes a few minutes"):
+        remotes.install(r.host, r.shared)
+    console.print(f"Updated oca on {r.host}. A running server keeps its version until it stops.")
 
 
 @server_app.command("extend")
