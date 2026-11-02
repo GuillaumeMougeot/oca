@@ -252,13 +252,13 @@ def test_an_ended_job_is_forgotten_so_up_starts_anew(ucloud: dict[str, Any]) -> 
 
 def test_sessions_in_a_folder_exclude_other_folders(monkeypatch: pytest.MonkeyPatch) -> None:
     listed = [
-        {"id": "a", "directory": "/w/p"},
-        {"id": "b", "directory": "/w/p/sub"},
-        {"id": "c", "directory": "/w/project2"},  # shares the prefix, not the folder
-        {"id": "d", "directory": "/elsewhere"},
+        {"id": "a", "directory": "/w/p", "updated": 1},
+        {"id": "b", "directory": "/w/p/sub", "updated": 2},
+        {"id": "c", "directory": "/w/project2", "updated": 3},  # shares the prefix only
+        {"id": "d", "directory": "/elsewhere", "updated": 4},
     ]
     monkeypatch.setattr(agent, "opencode", lambda args: json.dumps(listed))
-    assert agent.sessions_in(Path("/w/p")) == ["a", "b"]
+    assert [s["id"] for s in agent.sessions(Path("/w/p"))] == ["b", "a"]  # the latest first
 
 
 def test_stale_web_state_is_ignored() -> None:
@@ -641,14 +641,20 @@ def test_oca_id_opens_that_model_and_ls_lists_every_pair(
 
     monkeypatch.setattr(cli, "_ready", ready)
     monkeypatch.setattr(cli.agent, "launch", opened.append)
+    here = [{"id": "ses_1abcdefghijk", "title": "new"}, {"id": "ses_2zz", "title": "old"}]
+    monkeypatch.setattr(cli.agent, "sessions", lambda folder: here)
     run = CliRunner().invoke
     assert run(cli.app, ["deep", "-c"]).exit_code == 0  # part of an id
     assert run(cli.app, ["-c", "qwen3.6@spark"]).exit_code == 0  # options first
-    assert run(cli.app, ["-r", "ses_1"]).exit_code == 0  # resumes, as in Claude Code
+    assert run(cli.app, ["-r", "ses_1"]).exit_code == 0  # the start of a session's id
+    assert run(cli.app, ["-r"], input="2\n").exit_code == 0  # alone: a menu, as in Claude Code
+    assert run(cli.app, ["-r", "-y"], input="1\n").exit_code == 0
     assert opened == [
         *("deepseek@ucloud", ["--continue", "--model", "oca/ucloud"]),
         *("qwen3.6@spark", ["--continue", "--model", "oca/spark"]),
-        *(None, ["--session", "ses_1"]),
+        *(None, ["--session", "ses_1abcdefghijk"]),
+        *(None, ["--session", "ses_2zz"]),
+        *(None, ["--session", "ses_1abcdefghijk"]),
     ]
     several = run(cli.app, ["spark"]).exception  # three models fit there; no terminal to ask
     assert "could be qwen3.6@spark, qwen3.8-27b@spark, flash-next@spark" in str(several)
@@ -727,6 +733,31 @@ def test_tab_completes_commands_and_ids(monkeypatch: pytest.MonkeyPatch, no_gpu:
     ]
 
 
+def test_tab_completion_installs_itself(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from oca import cli
+
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(cli.sys, "stdin", Terminal())
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    cli._completion()
+    path = tmp_path / "share" / "bash-completion" / "completions" / "oca"
+    assert "_OCA_COMPLETE=complete_bash" in path.read_text()  # bash-completion loads it
+    path.write_text("old")
+    cli._completion()  # refreshed when oca's changes
+    assert "complete_bash" in path.read_text() and path in install.owned_paths()
+    monkeypatch.setenv("OCA_SHARED", "1")  # an install for all users is not the user's shell
+    path.unlink()
+    cli._completion()
+    assert not path.exists()
+    assert "completion" not in CliRunner().invoke(cli.app, ["-h"]).output
+
+
 def test_sessions_and_server_update(monkeypatch: pytest.MonkeyPatch) -> None:
     from typer.testing import CliRunner
 
@@ -735,15 +766,23 @@ def test_sessions_and_server_update(monkeypatch: pytest.MonkeyPatch) -> None:
     Settings(remotes={"spark": SPARK}).save()
     ran: list[list[str]] = []
     monkeypatch.setattr(cli.agent, "launch", ran.append)
+    title = "Fix the router's retry when a server stops, and say why it stopped in the menu"
+    here = [
+        {"id": "ses_e6862e455ffeAAA", "title": title, "updated": 0, "directory": str(Path.cwd())},
+        {"id": "ses_e6862e455ffeBBB", "title": "b", "updated": 0, "directory": "/x"},
+    ]
+    monkeypatch.setattr(cli.agent, "sessions", lambda folder: here)
     run = CliRunner().invoke
-    run(cli.app, ["sessions"])
-    run(cli.app, ["sessions", "rm", "ses_1"])
-    assert ran == [["session", "list"], ["session", "delete", "ses_1"]]
-    monkeypatch.setattr(cli.agent, "sessions_in", lambda folder: ["a", "b"])
+    listed = run(cli.app, ["sessions"]).output  # printed, with no pager to quit
+    assert "ses_e6862e455ffeA " in listed and "ses_e6862e455ffeB " in listed  # told apart
+    assert "say why it stopped" in listed.replace("\n", " ").replace("  ", " ")  # whole titles
+    run(cli.app, ["sessions", "rm", "ses_e6862e455ffeB"])
+    assert ran == [["session", "delete", "ses_e6862e455ffeBBB"]]
+    assert "type more" in str(run(cli.app, ["sessions", "rm", "ses_e68"]).exception)
     deleted: list[str] = []
     monkeypatch.setattr(cli.agent, "opencode", lambda args: deleted.append(args[-1]) or "")
     assert "Deleted 2 sessions." in run(cli.app, ["sessions", "clear", "-y"]).output
-    assert deleted == ["a", "b"]
+    assert deleted == ["ses_e6862e455ffeAAA", "ses_e6862e455ffeBBB"]
     installs: list[tuple[str, str]] = []
     monkeypatch.setattr(remotes, "install", lambda host, shared: installs.append((host, shared)))
     assert run(cli.app, ["server", "update", "spark"]).exit_code == 0

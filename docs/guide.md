@@ -13,7 +13,7 @@ curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.s
 
 `oca update` installs the newest release. For the latest unreleased code: `OCA_SOURCE=git+https://github.com/GuillaumeMougeot/oca sh install.sh`.
 
-**Tab completion:** run `oca --install-completion` once, then open a new terminal: Tab completes commands, ids (`oca fl` Tab) and server names.
+**Tab completion** comes on by itself the first time you run `oca` (bash, zsh or fish), in new terminals: Tab completes commands, ids (`oca fl` Tab) and server names.
 
 ## Daily use
 
@@ -26,7 +26,7 @@ OpenCode lists one model per server: `oca/local` and one per remote; `ctrl+x m` 
 
 **When a server is down,** oca never switches by itself. It asks in a menu, in OpenCode (↑↓ and Enter), saying why the server is down: restart it, use another server, or stop. If the restart fails, it says why and asks again. While a server starts, the reply shows its progress. A server used instead serves until the session's own server answers again, and says so in one line. If its context window is smaller, it sees only the latest messages; the session keeps its whole history. Launched while its server is down, `oca` asks the same in the terminal.
 
-**Sessions:** `oca sessions` lists this folder's sessions; `oca sessions rm <id>` deletes one, and `oca sessions clear` all those started in this folder or below. `oca -c` reopens the last session, and `oca -r <id>` a given one, as in Claude Code. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles when a remote answers at launch; the local CPU model skips them, since a title costs 40 to 80 s there.
+**Sessions:** `oca sessions` prints this folder's sessions, the latest first, with their whole titles and short ids. `oca -c` reopens the last one; `oca -r <id>` a given one (the start of its id will do), and `oca -r` alone offers a numbered list, as in Claude Code. `oca sessions rm <id>` deletes one, and `oca sessions clear` all those started in this folder or below. Inside OpenCode, `ctrl+x l` (or `/sessions`) lists them. Sessions get titles when a remote answers at launch; the local CPU model skips them, since a title costs 40 to 80 s there.
 
 **Effort:** `ctrl+t` in OpenCode cycles the model's variants: `none`, `low`, `medium`, `high`, `max`. Without a variant, each model uses its default. For one task: `oca run --variant low "…"`.
 - `none` turns thinking off: fastest, but weakest.

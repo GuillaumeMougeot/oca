@@ -192,11 +192,25 @@ def opencode_state_dirs() -> list[Path]:
     return [Path(os.environ.get(var) or default) / "opencode" for var, default in xdg.items()]
 
 
+def completion_paths() -> dict[str, Path]:
+    """Where oca's tab completion goes, by shell: where bash-completion and fish load it by
+    themselves, and zsh's ~/.zfunc, which typer adds to ~/.zshrc."""
+    home = Path.home()
+    data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    return {
+        "bash": data / "bash-completion" / "completions" / "oca",
+        "zsh": home / ".zfunc" / "_oca",
+        "fish": config / "fish" / "completions" / "oca.fish",
+    }
+
+
 def owned_paths(keep_models: bool = False, purge: bool = False) -> list[Path]:
     data = [data_dir() / p for p in DATA_PARTS if not (keep_models and p == "models")]
     conf = [config_dir() / p for p in CONFIG_PARTS]
     extra = opencode_state_dirs() if purge else []
-    return [p for p in (*data, *conf, *extra) if p.exists() or p.is_symlink()]
+    tabs = list(completion_paths().values())
+    return [p for p in (*data, *conf, *extra, *tabs) if p.exists() or p.is_symlink()]
 
 
 def disk_usage(path: Path) -> int:

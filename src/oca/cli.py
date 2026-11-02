@@ -58,11 +58,14 @@ def _complete_servers(incomplete: str) -> list[str]:
 
 
 class _Oca(TyperGroup):
-    """`oca <id>` opens that pair, as `oca -m <id>` does."""
+    """`oca <id>` opens that pair, as `oca -m <id>` does; `-r` alone picks a session."""
 
     def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
         i = 0
         while i < len(args) and args[i].startswith("-"):
+            after = args[i + 1] if i + 1 < len(args) else "-"
+            if args[i] in ("-r", "--resume") and after.startswith("-"):
+                args = [*args[: i + 1], "", *args[i + 1 :]]  # no session given: pick one
             i += 2 if args[i] in VALUED else 1
         if i < len(args) and args[i] not in self.commands:
             args = [*args[:i], "--model", *args[i:]]
@@ -76,6 +79,34 @@ class _Oca(TyperGroup):
         if not incomplete.startswith("-"):
             found += [CompletionItem(i) for i in _complete_ids(incomplete)]
         return found
+
+    def get_params(self, ctx: Any) -> list[Any]:
+        """Without typer's --install-completion and --show-completion: oca installs it."""
+        tabs = ("install_completion", "show_completion")
+        return [p for p in super().get_params(ctx) if p.name not in tabs]
+
+
+def _completion() -> None:
+    """Install tab completion for the user's shell, or refresh it; oca does it, not the user.
+    Bash and fish load it without a line in their rc file; zsh gets typer's."""
+    from typer._completion_shared import get_completion_script, install_zsh
+
+    shell = Path(os.environ.get("SHELL", "")).name
+    path = install.completion_paths().get(shell)
+    if path is None or os.environ.get("OCA_SHARED") or not sys.stdin.isatty():
+        return
+    script = get_completion_script(prog_name="oca", complete_var="_OCA_COMPLETE", shell=shell)
+    with suppress(OSError):
+        if path.is_file() and path.read_text() == script:
+            return
+        new = not path.exists()
+        if shell == "zsh":
+            install_zsh(prog_name="oca", complete_var="_OCA_COMPLETE", shell=shell)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(script)
+        if new:
+            Console(stderr=True).print(f"Tab completion is on for {shell}, in new terminals.")
 
 
 app = typer.Typer(
@@ -316,7 +347,9 @@ def main(
     ),
     resume: Annotated[
         str | None,
-        typer.Option("--resume", "-r", help="Resume this session; `oca sessions` lists them."),
+        typer.Option(
+            "--resume", "-r", help="Resume a session: give the start of its id, or pick one."
+        ),
     ] = None,
     model: ModelOpt = None,
     yes: Yes = False,
@@ -325,11 +358,13 @@ def main(
         typer.Option("--version", "-V", callback=_version, is_eager=True, help="Show the version."),
     ] = False,
 ) -> None:
+    _completion()
     if ctx.invoked_subcommand is None:
         settings = Settings.load()
+        session = None if resume is None else _session(resume)  # before any server starts
         name = _ready(settings, _pick(settings, model) if model else None, yes)
         args = ["--continue"] if last else []
-        args += ["--session", resume] if resume else []
+        args += ["--session", session] if session else []
         args += ["--model", f"{agent.PROVIDER}/{name}"] if name != settings.default_server else []
         agent.launch(args)
 
@@ -355,21 +390,70 @@ def run(ctx: typer.Context, model: ModelOpt = None, yes: Yes = False) -> None:
 
 @sessions_app.callback(invoke_without_command=True)
 def sessions_list(ctx: typer.Context) -> None:
-    """List this folder's sessions; `oca -r <id>` resumes one."""
-    if ctx.invoked_subcommand is None:
-        agent.launch(["session", "list"])
+    """List this folder's sessions, the latest first; `oca -r <id>` resumes one."""
+    if ctx.invoked_subcommand is not None:
+        return
+    found = agent.sessions(Path.cwd())
+    if not found:
+        console.print("No sessions started in this folder.")
+        return
+    short = _short([s["id"] for s in found])
+    table = Table(box=None, show_header=False, padding=(0, 2, 0, 0))
+    table.add_column(no_wrap=True)
+    table.add_column(no_wrap=True)
+    table.add_column(overflow="fold")  # whole titles: they wrap
+    for s in found:
+        when = time.strftime("%m-%d %H:%M", time.localtime(int(s.get("updated") or 0) / 1000))
+        folder = os.path.relpath(s.get("directory") or ".", Path.cwd())
+        title = s.get("title") or "(untitled)"
+        table.add_row(short[s["id"]], when, title + ("" if folder == "." else f" ({folder})"))
+    console.print(table, highlight=False)
+    console.print(
+        "`oca -r <id>` resumes one (the start of its id will do; `oca -r` alone picks); "
+        "`oca sessions rm <id>` deletes one."
+    )
+
+
+def _short(ids: list[str]) -> dict[str, str]:
+    """Each id cut to the length at which all are still told apart, as git shortens hashes."""
+    size = 12
+    while len({i[:size] for i in ids}) < len(ids):
+        size += 1
+    return {i: i[:size] for i in ids}
+
+
+def _session(word: str) -> str:
+    """The id of this folder's session that ``word`` starts; a numbered menu when it is ""."""
+    found = agent.sessions(Path.cwd())
+    if not word:
+        if not found:
+            raise OcaError("no session started in this folder")
+        shown = found[:9]
+        for i, s in enumerate(shown, 1):
+            console.print(f"  {i}. {escape(s.get('title') or '(untitled)')}")
+        return str(
+            shown[int(_choose("Resume", [str(i) for i in range(1, len(shown) + 1)], "1")) - 1]["id"]
+        )
+    matches = [s["id"] for s in found if s["id"].startswith(word)]
+    if len(matches) == 1:
+        return str(matches[0])
+    if len(matches) > 1:
+        raise OcaError(f"{word!r} starts {len(matches)} sessions; type more of its id")
+    return word  # a whole id, maybe from another folder: OpenCode says if it does not exist
 
 
 @sessions_app.command("rm")
-def sessions_rm(session: Annotated[str, typer.Argument(help="Its id; `oca sessions`.")]) -> None:
+def sessions_rm(
+    session: Annotated[str, typer.Argument(help="Its id, or its start; `oca sessions`.")],
+) -> None:
     """Delete a session."""
-    agent.launch(["session", "delete", session])
+    agent.launch(["session", "delete", _session(session)])
 
 
 @sessions_app.command("clear")
 def sessions_clear(yes: Yes = False) -> None:
     """Delete the sessions started in this folder or below."""
-    ids = agent.sessions_in(Path.cwd())
+    ids = [s["id"] for s in agent.sessions(Path.cwd())]
     if not ids:
         console.print("No sessions started in this folder.")
         return

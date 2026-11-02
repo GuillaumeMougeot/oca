@@ -154,19 +154,21 @@ def opencode(args: list[str]) -> str:
     ).stdout
 
 
-def sessions_in(folder: Path) -> list[str]:
-    """Ids of the sessions started in ``folder`` or below.
+def sessions(folder: Path) -> list[dict[str, Any]]:
+    """The sessions started in ``folder`` or below, the latest first: id, title, directory,
+    and ``updated`` in ms.
 
     OpenCode lists sessions per project, and files every folder outside git under one
     "global" project, so its list from such a folder also holds other folders' sessions.
     """
     found = json.loads(opencode(["session", "list", "--format", "json", "-n", "1000000"]) or "[]")
     root = str(folder)
-    return [
-        s["id"]
+    here = [
+        s
         for s in found
         if (d := s.get("directory") or "") == root or d.startswith(root.rstrip(os.sep) + os.sep)
     ]
+    return sorted(here, key=lambda s: -int(s.get("updated") or 0))
 
 
 def launch(args: list[str], **env: str) -> NoReturn:
