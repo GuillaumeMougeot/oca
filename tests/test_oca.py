@@ -12,6 +12,7 @@ import tarfile
 import threading
 import zipfile
 from contextlib import nullcontext
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -92,8 +93,8 @@ def test_opencode_sees_one_model_per_server(no_gpu: None) -> None:
     assert cfg["enabled_providers"] == [agent.PROVIDER]
     models = provider["models"]
     assert list(models) == ["local", "ucloud", "lab"]
-    assert "deepseek-v4.1-flash" in models["ucloud"]["name"]
-    assert s.resolved_model.id in models["local"]["name"]
+    assert models["ucloud"]["name"] == "deepseek@ucloud"  # what each serves, as `oca ls` says
+    assert models["local"]["name"] == "qwen3.6@local" and models["lab"]["name"] == "m@lab"
     # Each server's own window, so OpenCode compacts a session for the one it uses.
     assert models["lab"]["limit"] == {"context": 32768, "output": 8192}
     assert models["ucloud"]["limit"]["context"] == config.CLUSTER_MODELS[UCLOUD.model].context
@@ -468,13 +469,13 @@ def test_router_says_why_a_restart_failed_and_offers_the_rest(
     stop = httpx.post(url, json={**step, "messages": _answered(ask, call, "Stop")}, headers=key)
     said = _events(stop.text)
     assert said[0]["choices"][0]["delta"]["content"].startswith(
-        "↪ oca: spark stays down. `oca start spark` restarts it"
+        "↪ oca: spark stays down. `oca qwen3.6@spark` restarts it"
     )
     assert said[-1]["choices"][0]["finish_reason"] == "stop"
     run = httpx.post(url, json={**step, "tools": []}, headers=key).text  # `opencode run`
     assert _events(run)[0]["choices"][0]["delta"]["content"] == (
         "↪ oca: spark is not answering: its server stopped: idle for 60 min, at 14:02. "
-        "`oca start spark` restarts it; ctrl+x m picks another server.\n\n"
+        "`oca qwen3.6@spark` restarts it; ctrl+x m picks another server.\n\n"
     )
     title = httpx.post(url, json={**step, "stream": False}, headers=key)
     assert title.status_code == 424 and "not answering" in title.json()["error"]["message"]
@@ -623,32 +624,129 @@ def test_oca_asks_what_to_do_when_its_server_is_down(
         cli._ready(s, yes=True)
 
 
-def test_oca_server_opens_it_and_ls_lists_every_server(
+def test_oca_id_opens_that_model_and_ls_lists_every_pair(
     monkeypatch: pytest.MonkeyPatch, no_gpu: None
 ) -> None:
     from typer.testing import CliRunner
 
-    from oca import cli
+    from oca import cli, remotes
 
-    Settings(remotes={"spark": SPARK}).save()
+    monkeypatch.setattr(remotes, "memory_gb", lambda gpu: 64.0)  # flash-next does not fit
+    Settings(remotes={"spark": SPARK, "ucloud": UCLOUD}).save()
     opened: list[Any] = []
-    monkeypatch.setattr(cli, "_ready", lambda settings, name, yes: opened.append(name) or name)
+
+    def ready(settings: Settings, pair: remotes.Pair | None, yes: bool) -> str:
+        opened.append(pair and pair.id)
+        return pair.server if pair else "local"
+
+    monkeypatch.setattr(cli, "_ready", ready)
     monkeypatch.setattr(cli.agent, "launch", opened.append)
     run = CliRunner().invoke
-    assert run(cli.app, ["spark", "-c"]).exit_code == 0
-    assert opened == ["spark", ["--continue", "--model", "oca/spark"]]
-    wrong = run(cli.app, ["sprak"])
-    assert wrong.exit_code == 2 and "no command or server 'sprak'" in wrong.output
-    assert "oca <server>" in run(cli.app, ["-h"]).output
-    assert "Usage: oca remote add" in run(cli.app, ["remote", "add", "-h"]).output
-    monkeypatch.setattr(cli, "_state", lambda settings, name: "stopped")
+    assert run(cli.app, ["deep", "-c"]).exit_code == 0  # part of an id
+    assert run(cli.app, ["-c", "qwen3.6@spark"]).exit_code == 0  # options first
+    assert run(cli.app, ["-r", "ses_1"]).exit_code == 0  # resumes, as in Claude Code
+    assert opened == [
+        *("deepseek@ucloud", ["--continue", "--model", "oca/ucloud"]),
+        *("qwen3.6@spark", ["--continue", "--model", "oca/spark"]),
+        *(None, ["--session", "ses_1"]),
+    ]
+    several = run(cli.app, ["spark"]).exception  # three models fit there; no terminal to ask
+    assert "could be qwen3.6@spark, qwen3.8-27b@spark, flash-next@spark" in str(several)
+    assert "nothing is called 'sprak'" in str(run(cli.app, ["sprak"]).exception)
+    assert "oca <id>" in run(cli.app, ["-h"]).output
+    assert "Usage: oca server add" in run(cli.app, ["server", "add", "-h"]).output
+    assert "Usage: oca ucloud" in run(cli.app, ["ucloud", "-h"]).output  # a command, not a pair
+    assert run(cli.app, ["-V"]).output.startswith("oca ")
+    monkeypatch.setattr(cli, "_state", lambda settings, name: ("stopped", None))
     listed = run(cli.app, ["ls"]).output
-    assert re.search(r"\n +spark +spark \(all users\) +qwen3\.6-35b-a3b +262k +stopped", listed)
-    assert re.search(r"\n \* +local +this machine", listed)  # the default
-    with pytest.raises(OcaError, match="is an oca command"):
-        cli._add(Settings.load(), "ls", "you@box", None, yes=True)
-    assert "ucloud-api" in cli._commands() and "ucloud" not in cli._commands()  # a server name
-    assert "Usage: oca ucloud-api" in run(cli.app, ["ucloud-api", "-h"]).output
+    assert listed.startswith("local: this machine (cpu)\n * qwen3.6@local ")  # the default
+    assert re.search(r"\n   qwen3\.8-27b@local +qwen3\.8-27b +65k  not downloaded\n", listed)
+    assert "\nspark: spark over SSH, for all its users\n   qwen3.6@spark " in listed
+    assert re.search(
+        r"\n   deepseek@ucloud +deepseek-v4\.1-flash, 2 B200s +262k  stopped\n", listed
+    )
+    assert re.search(r"\n   flash-next@ucloud +qwen3\.8-flash-next, 1 B200 +262k\n", listed)
+    assert "flash-next@local" not in listed  # 64 GB: it does not fit
+    assert run(cli.app, ["config", "default", "deep"]).exit_code == 0
+    assert Settings.load().default == "deepseek@ucloud"
+    assert "\ndefault = 'deepseek@ucloud'\n" in run(cli.app, ["config"]).output
+
+
+def test_pairs_name_each_model_on_each_server(
+    monkeypatch: pytest.MonkeyPatch, no_gpu: None
+) -> None:
+    from oca import remotes
+
+    monkeypatch.setattr(remotes, "memory_gb", lambda gpu: 130.0)
+    lab = Remote("url", model="big/model", url="http://lab:8000", context=32768)
+    s = Settings(remotes={"spark": replace(SPARK, memory=34.2), "ucloud": UCLOUD, "lab": lab})
+    ids = [p.id for p in remotes.pairs(s)]
+    assert ids == [
+        *("qwen3.6@local", "qwen3.8-27b@local", "flash-next@local"),  # 130 GB: all fit
+        *("qwen3.6@spark", "qwen3.8-27b@spark"),  # 34 GB: no flash-next
+        *("deepseek@ucloud", "qwen3.8-27b@ucloud", "flash-next@ucloud"),  # what it serves first
+        "big/model@lab",
+    ]
+    find = lambda word: [p.id for p in remotes.find(s, word)]  # noqa: E731
+    assert find("flash") == ["flash-next@local", "flash-next@ucloud"]  # ids before model names
+    assert find("v4.1") == ["deepseek@ucloud"] and find("qwen3.6@spark") == ["qwen3.6@spark"]
+    assert find("qwen3.8-27b-fp8@ucloud") == ["qwen3.8-27b@ucloud"] and find("nope") == []
+    assert remotes.default_pair(s).id == "qwen3.6@local"  # a bare server: the model it serves
+    s.default = "qwen3.8-27b@spark"
+    s.validate()
+    assert remotes.default_pair(s).server == "spark" and s.default_server == "spark"
+    for wrong in ("deepseek@spark", "qwen3.6@nowhere"):
+        with pytest.raises(OcaError, match="default"):
+            replace(s, default=wrong).validate()
+
+
+def test_opening_another_model_on_an_ssh_machine_asks_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import typer
+
+    from oca import cli, remotes
+
+    s = Settings(remotes={"spark": SPARK})
+    s.save()
+    told: dict[str, Any] = {"state": "ready", "model": "qwen3.6-35b-a3b", "mine": True}
+    monkeypatch.setattr(remotes, "serve_call", lambda r, args: told)
+    asked: list[str] = []
+    monkeypatch.setattr(typer, "confirm", lambda q, **kw: asked.append(q) or True)
+    flash = remotes.Pair("flash-next@spark", "spark", "qwen3.8-flash-next", 262144)
+    assert cli._use(s, flash, yes=False) == flash
+    assert asked == ["spark serves qwen3.6-35b-a3b. Restart it with qwen3.8-flash-next?"]
+    assert Settings.load().remotes["spark"].model == "qwen3.8-flash-next"  # what it starts
+    told["mine"] = False  # someone else's: only they can switch it
+    assert cli._use(s, flash, yes=False).id == "qwen3.6@spark"
+    assert (
+        asked[-1] == "Open qwen3.6@spark instead?" and s.remotes["spark"].model == "qwen3.6-35b-a3b"
+    )
+
+
+def test_stop_and_pull_act_on_the_server_named(
+    monkeypatch: pytest.MonkeyPatch, no_gpu: None
+) -> None:
+    from typer.testing import CliRunner
+
+    from oca import cli, remotes
+
+    Settings(default="qwen3.6@spark", remotes={"spark": SPARK}).save()
+    downs: list[str] = []
+    monkeypatch.setattr(remotes, "down", lambda settings, name: downs.append(name) or True)
+    monkeypatch.setattr(cli.server, "stop", lambda: downs.append("local") or False)
+    monkeypatch.setattr(cli.router, "stop", lambda: downs.append("endpoint") or True)
+    run = CliRunner().invoke
+    assert "spark: stopped." in run(cli.app, ["stop"]).output  # the default's server
+    assert "local: was not running." in run(cli.app, ["stop", "local"]).output
+    assert run(cli.app, ["stop", "--all"]).exit_code == 0
+    assert downs == ["spark", "local", "local", "spark", "endpoint"]
+    ran: list[list[str]] = []
+    monkeypatch.setattr(cli.os, "execvp", lambda exe, args: ran.append(args))
+    monkeypatch.setattr(cli.install, "pull", lambda m: Path(m.id))
+    assert "Saved qwen3.8-27b" in run(cli.app, ["pull", "qwen3.8-27b"]).output  # a catalog id
+    run(cli.app, ["pull", "qwen3.6@spark"])
+    assert ran[-1][-1].endswith("/opt/oca/bin/oca pull qwen3.6-35b-a3b")  # there, by catalog id
 
 
 def test_ssh_remote_offers_the_biggest_model_that_fits(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -662,7 +760,7 @@ def test_ssh_remote_offers_the_biggest_model_that_fits(monkeypatch: pytest.Monke
     asked: list[str] = []
     monkeypatch.setattr(typer, "prompt", lambda q, **kw: asked.append(q) or kw["default"])
     assert cli._ssh_model("spark", 128.5, yes=False) == "qwen3.8-flash-next"
-    assert asked == ["Model for spark (qwen3.8-flash-next/qwen3.6-35b-a3b/qwen3.8-27b)"]
+    assert asked == ["Choose (1/2/3)"]  # numbered, the biggest first
 
 
 def test_a_split_model_downloads_its_first_part_last() -> None:
@@ -783,22 +881,6 @@ def test_starter_stops_and_unlists_its_server(ucloud: dict[str, Any]) -> None:
     assert ucloud["terminated"] == ["42"] and ucloud["files"] == {}
 
 
-def test_waiting_for_the_server_does_not_count_queue_time(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from oca import cluster
-
-    job = cluster.Job("serve", "1", "m", "t")
-    states = iter(["in queue"] * 3 + [None])
-    monkeypatch.setattr(cluster, "check", lambda s, j: next(states))
-    monkeypatch.setattr(cluster.time, "sleep", lambda s: None)
-    cluster.wait_ready(UCLOUD, job, lambda doing: None, timeout=0)  # queued: no timeout
-    loading = iter(["loading"] * 3)
-    monkeypatch.setattr(cluster, "check", lambda s, j: next(loading))
-    with pytest.raises(OcaError, match="not ready"):
-        cluster.wait_ready(UCLOUD, job, lambda doing: None, timeout=0)
-
-
 def test_web_password_is_made_once_and_private() -> None:
     first = agent.web_password()
     assert len(first) >= 20 and agent.web_password() == first
@@ -884,9 +966,9 @@ def test_ssh_remote_up_tunnels_to_its_server_and_down_stops_it(
     with pytest.raises(Down, match="its server stopped: idle for 60 min, at 14:02"):
         remotes.check(s, "spark")
     assert remotes.read_conn("spark") is None
-    assert cli._state(s, "spark") == "stopped (idle for 60 min, at 14:02)"  # `oca ls`
+    assert cli._state(s, "spark") == ("stopped (idle for 60 min, at 14:02)", None)  # `oca ls`
     monkeypatch.setattr(remotes, "serve_call", lambda r, args: (_ for _ in ()).throw(OcaError()))
-    assert cli._state(s, "spark") == "not answering"
+    assert cli._state(s, "spark") == ("not answering", None)
 
 
 def test_a_stopped_server_says_why(monkeypatch: pytest.MonkeyPatch) -> None:

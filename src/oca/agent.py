@@ -85,11 +85,12 @@ def _model(label: str, context: int) -> dict[str, Any]:
 
 
 def opencode_config(settings: Settings, titles: bool = False) -> dict[str, Any]:
-    """One model per server, named after it (ctrl+x m switches); the default server's model
-    is OpenCode's. Each has its server's context, so OpenCode compacts a session for it.
+    """One model per server, shown by the id of what it serves, such as flash-next@spark2
+    (ctrl+x m switches); the default's is OpenCode's. Keyed by server, so a session outlives
+    a change of model there. Each has its context, so OpenCode compacts a session for it.
     """
     models = {
-        name: _model(f"{name}: {remotes.label(settings, name)}", remotes.context(settings, name))
+        name: _model(remotes.pair_id(settings, name), remotes.context(settings, name))
         for name in settings.servers()
     }
     providers = {
@@ -105,7 +106,7 @@ def opencode_config(settings: Settings, titles: bool = False) -> dict[str, Any]:
             "models": models,
         }
     }
-    ref = f"{PROVIDER}/{settings.default}"
+    ref = f"{PROVIDER}/{settings.default_server}"
     return {
         "$schema": "https://opencode.ai/config.json",
         "autoupdate": False,  # versions are pinned by oca

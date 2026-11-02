@@ -10,9 +10,9 @@ A Claude Code–like coding agent built only from open-source software and open-
 ```bash
 curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.sh | sh
 oca                          # first run asks which servers to use, then opens OpenCode
-oca remote add spark you@spark   # optional: a machine over SSH; or `ucloud`, or a URL
-oca ls                       # every server: where, model, state; * marks the default
-oca spark                    # a session on that server; `oca remote default spark` for all
+oca server add spark you@spark   # optional: a machine over SSH; or `ucloud`, or a URL
+oca ls                       # every model on every server, with its id; * marks the default
+oca flash-next@spark         # a session on that model; part of an id will do
 oca web                      # OpenCode in a browser, e.g. on a phone
 ```
 

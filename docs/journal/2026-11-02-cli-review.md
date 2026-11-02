@@ -1,6 +1,6 @@
 # CLI review
 
-**Status:** OPEN. One bug fixed; the rest waits for the user's decisions.
+**Status:** RESOLVED. Built on `remotes` the same day, with one change of the user's: what you open is a model on a server, not a server.
 
 ## Question
 Is oca's command line easy to learn, consistent, and fit for daily use? Reviewed on branch `remotes` (c94477c) against the tools its users know: Claude Code first, which the user came from, then uv, Ollama, git, docker and gh, and the [Command Line Interface Guidelines](https://clig.dev).
@@ -29,23 +29,27 @@ Is oca's command line easy to learn, consistent, and fit for daily use? Reviewed
 
 "Before merge" means before `remotes` reaches main: these change names that main's users would otherwise learn twice.
 
-## After the changes
-```
-oca [server] [-c | -r <session>] [-y]   OpenCode on a server (the default if none)
-oca run "<task>" [-s server]            one task, unattended
-oca ls                                  servers: where, model, state; * marks the default
-oca start [server] [model] [-w]         start a server (the default if none)
-oca stop [server] [--all]               stop it; --all also stops oca's endpoint
-oca logs [server] [-f] [-n N]           its log
-oca server add|rm|default|set|extend    configure servers
-oca sessions [rm <id> | clear]          this folder's sessions
-oca web [stop]                          OpenCode in a browser
-oca models | pull [model] [-s server] | config [key [value]] | status | update | setup | uninstall
-oca ucloud-api …                        the bundled UCloud tool
-oca --version
-```
+## Decisions (2026-11-02)
+The user approved all three, and corrected the unit: `oca ls` lists every server and each model it can serve; each such pair has an id, `oca <id>` opens it, and one pair is the default. They also kept `oca ucloud` for the UCloud tool (finding 1 reverted): ids contain `@`, so it no longer clashes with the server named ucloud.
 
-## Decisions for the user
-1. Flags as in Claude Code: `-r` resumes, `-s` picks a server (finding 2). Recommended.
-2. Rename `oca remote` to `oca server` (finding 5). Recommended.
-3. No server name means the default server, for every command (finding 4). Recommended.
+- **Ids:** the model's short name at the server: `qwen3.6@local`, `flash-next@spark`, `deepseek@ucloud`. Not row numbers, which shift when a server is added, nor random codes, which nobody remembers. Part of an id will do: an exact id first, then ids containing the word, then model names (`oca v4.1`); a word that fits several gets a numbered menu, or an error listing them without a terminal.
+- **What is listed:** UCloud's models, the llama.cpp models that fit this machine (its GPU, or RAM on CPU) and an SSH machine (its memory, recorded when added), and a URL's one model.
+- **One model per server at a time:** opening another model on a running server restarts it. On an SSH machine oca asks first; on one someone else started, it offers the running model instead, since only the starter may switch. UCloud already asked. `oca ls` shows the state only on the model a server serves.
+- **OpenCode** still lists one model per server, named by the id it serves. Keyed by server, a session outlives a change of model; and a keyboard shortcut mid-session should not start a 2×B200 job.
+- **Fewer commands:** `oca start` went (`oca <id>` starts what it opens, and replies wait while it starts), as did `oca models` (`oca ls`) and `oca remote default` (`oca config default <id>`). `oca stop`, `logs` and `pull` take an id or a server, and act on the default without one; `oca stop --all` stops everything.
+- **Is a server group still needed?** Yes, for the rare actions on machines: `oca server add|rm|set|extend`. Without it they would be four more top-level verbs, or hidden in `oca config`. Pairs are what you choose; servers are what you add, configure and stop.
+- **Also done:** `-r` resumes and `-m` picks a model; `oca run "<task>"`; `--version`; errors to stderr; `serve` and `setup` hidden; single flags; help on every option; a numbered menu for the model when adding a machine; `oca status` covers this machine; `oca ls` prints a line per server, then one per model, to fit 80 columns. Help now lists 13 commands, against 17 and the `remote` group's 7.
+- **Later:** findings 12 and 13 (shell completion, `oca sessions rm`/`clear`).
+
+## The command line now
+```
+oca [id] [-c | -r <session>] [-y]   OpenCode on a model (the default if none)
+oca run "<task>" [-m id]            one task, unattended
+oca ls                              each model on each server, with its id; * the default
+oca stop [id|server] [--all]        stop or leave its server
+oca logs [id|server] [-f]           its log
+oca pull [id]                       download its model ahead of time
+oca server add|rm|set|extend        configure servers
+oca sessions · web · status · config · update · ucloud · uninstall
+oca -V | -h
+```

@@ -3,10 +3,12 @@
 ## Unreleased
 
 - **Remotes.** `oca remote` replaces `oca cluster`. A remote is UCloud, a machine you reach over SSH (e.g. a DGX Spark) where oca installs itself for you or for all its users, or any OpenAI-compatible URL. Old `cluster_*` settings become the remote `ucloud`, which becomes the default.
-- **A default server; `oca <server>` opens another.** `oca ls` lists them all: where each runs, its model and state. OpenCode lists one model per server; `ctrl+x m` switches.
-- **`oca start <server>` and `oca stop <server>`** start or stop any server; alone, this machine's. They replace `oca remote up` and `down`, and return at once: replies on a starting server wait for it, showing its progress (`--wait` blocks).
+- **`oca ls` and `oca <id>`.** `oca ls` lists every server and, under it, each model it can serve, with an id such as `flash-next@spark`; `oca <id>` opens one (part of an id will do, and one that fits several gets a numbered menu). One is the default, which plain `oca` opens: `oca config default <id>`. OpenCode lists one model per server, named by its id; `ctrl+x m` switches.
+- **Flags as in Claude Code:** `-r <id>` resumes a session (was `-s`), `-m <id>` picks a model (`-r` picked a server).
+- **`oca run "<task>"`** runs one task unattended (was `oca run -- run "<task>"`).
+- **`oca server add|rm|set|extend`** replaces `oca remote`. `oca stop`, `oca logs` and `oca pull` take an id or a server, and act on the default without one; `oca stop --all` stops everything. `oca start` and `oca models` are gone: `oca <id>` starts what it opens, and `oca ls` lists the models.
+- **`oca --version`**; errors go to stderr; `oca serve` and `oca setup`, which oca runs for you, are out of the help.
 - **Qwen3.8-Flash-Next on 128 GB machines** such as a DGX Spark, through llama.cpp (a 94 GB GGUF in three parts). Adding a machine over SSH offers the biggest model that fits its GPU.
-- **`oca ucloud-api`** replaces `oca ucloud` for the bundled UCloud tool, so that `oca ucloud` opens the server named ucloud.
 - `-h` shows help, like `--help`. Questions with fixed answers list them and ask again after a wrong one.
 - **When a server is down, oca asks** in OpenCode's menu, saying why: restart it, use another server, or stop. It never switches by itself. A server used instead serves until the session's own answers again; a smaller one sees the latest messages.
 - **`oca serve`** serves this machine's model to other machines' oca, which run it over SSH; it stops when idle and records why it stopped.

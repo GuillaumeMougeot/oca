@@ -19,4 +19,4 @@ One file per question: `YYYY-MM-DD-topic.md`, dated by when it was opened. Each 
 | [2026-11-01-new-models](2026-11-01-new-models.md) | OPEN | Late-October models: only Nanbeige4.3-33B and Apex-35B deserve an eval; none beats the B200 picks on paper |
 | [2026-11-01-remotes](2026-11-01-remotes.md) | OPEN | `oca remote` (UCloud, SSH, URL), a default server; a down server gets a menu (restart, another, stop), never a silent switch; Spark test next |
 | [2026-11-01-phone-chat](2026-11-01-phone-chat.md) | OPEN | Phone without Termux, through the user's own servers only: not OpenClaw or Telegram; Matrix on the user's VPS proposed |
-| [2026-11-02-cli-review](2026-11-02-cli-review.md) | OPEN | The CLI's names and defaults: one bug fixed (`oca ucloud`), renames and one rule for server arguments proposed |
+| [2026-11-02-cli-review](2026-11-02-cli-review.md) | RESOLVED | `oca ls` lists each model on each server with an id, `oca <id>` opens it; flags as in Claude Code; 13 commands in help, from 17 |

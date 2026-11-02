@@ -10,6 +10,7 @@ import secrets
 import shutil
 import subprocess
 import tomllib
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import IO, Any
@@ -44,6 +45,11 @@ class Model:
     args: tuple[str, ...] = ("--temp", "0.6", "--top-p", "0.95", "--top-k", "20")
     # Its reasoning_effort for low, medium, high and max, as for ClusterModel.
     efforts: tuple[str | int, ...] = ()
+    alias: str = ""  # its name in ids such as qwen3.6@local; "" for its id
+
+    @property
+    def short(self) -> str:
+        return self.alias or self.id
 
 
 MODELS: dict[str, Model] = {
@@ -62,6 +68,7 @@ MODELS: dict[str, Model] = {
                 *("--temp", "0.6", "--top-p", "0.95", "--top-k", "20"),
                 *("--spec-type", "draft-mtp", "--spec-draft-n-max", "3", "--parallel", "1"),
             ),
+            alias="qwen3.6",
         ),
         Model(
             "qwen3.8-27b",
@@ -80,6 +87,7 @@ MODELS: dict[str, Model] = {
             "125B MoE, 6B active, Qwen Community License: for 128 GB, e.g. a DGX Spark",
             ("--temp", "1.0", "--top-p", "0.95", "--top-k", "20", "--min-p", "0.0"),
             ("low", "medium", "xhigh", "xhigh"),  # as on UCloud; xhigh is its default
+            alias="flash-next",
         ),
     )
 }
@@ -106,6 +114,11 @@ class ClusterModel:
     # The model's reasoning_effort for low, medium, high and max; () if it only has thinking
     # on or off. Checked against its chat template (Flash-Next) or vLLM's encoder (DeepSeek).
     efforts: tuple[str | int, ...] = ()
+    alias: str = ""  # its name in ids such as deepseek@ucloud; "" for its id
+
+    @property
+    def short(self) -> str:
+        return self.alias or self.id
 
 
 CLUSTER_MODELS: dict[str, ClusterModel] = {
@@ -123,6 +136,7 @@ CLUSTER_MODELS: dict[str, ClusterModel] = {
                 *("--enable-auto-tool-choice", "--tool-call-parser", "qwen3_coder"),
                 *("--reasoning-parser", "qwen3"),
             ),
+            alias="qwen3.8-27b",
         ),
         ClusterModel(
             "qwen3.8-flash-next",
@@ -140,6 +154,7 @@ CLUSTER_MODELS: dict[str, ClusterModel] = {
                 *("--reasoning-parser", "qwen3"),
             ),
             efforts=("low", "medium", "xhigh", "xhigh"),  # xhigh is its default and top
+            alias="flash-next",
         ),
         ClusterModel(
             "deepseek-v4.1-flash",
@@ -173,9 +188,18 @@ CLUSTER_MODELS: dict[str, ClusterModel] = {
             ),
             (("VLLM_ENGINE_READY_TIMEOUT_S", "3600"),),
             efforts=("low", 62, "high", "max"),  # a 1-100 budget: low 50, high 75 (default)
+            alias="deepseek",
         ),
     )
 }
+
+
+def catalog(kind: str) -> dict[str, str]:
+    """The ids of the models a server of this kind serves, by short name: UCloud runs vLLM,
+    this machine and SSH machines llama.cpp."""
+    if kind == "ucloud":
+        return {m.short: m.id for m in CLUSTER_MODELS.values()}
+    return {m.short: m.id for m in MODELS.values()}
 
 
 def config_dir() -> Path:
@@ -244,6 +268,24 @@ def has_gpu() -> bool:
     return has_nvidia_gpu() or (platform.system() == "Darwin" and platform.machine() == "arm64")
 
 
+def memory_gb(gpu: bool) -> float:
+    """GB a model can use here: the first NVIDIA GPU's, else RAM (Apple Silicon and a DGX
+    Spark share it with their GPU); 0 if unknown."""
+    with suppress(OSError, ValueError, subprocess.SubprocessError):
+        if gpu and has_nvidia_gpu():
+            query = ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"]
+            first = subprocess.run(query, capture_output=True, text=True).stdout.split("\n")[0]
+            if first.strip().isdigit():  # "[N/A]" where the GPU shares the RAM
+                return int(first) * 1.048576 / 1000  # MiB
+        if platform.system() == "Darwin":
+            size = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
+            return int(size.stdout) / 1e9
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) * 1024 / 1e9
+    return 0.0
+
+
 def process_alive(pid: int, name: str) -> bool:
     """True when ``pid`` runs a command line containing ``name`` (``/proc``, else ``ps``)."""
     if pid <= 0:
@@ -277,6 +319,7 @@ class Remote:
     url: str = ""  # url: base URL of an OpenAI-compatible server
     key: str = ""  # url: its API key
     context: int = 0  # url: its context window; ssh: the one last seen
+    memory: float = 0  # ssh: GB its GPU can use, seen when added; 0 if unknown
 
 
 def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
@@ -303,11 +346,20 @@ class Settings:
     port: int = 8080
     threads: int = 0  # 0: llama.cpp picks
     context: int = 0  # 0: the model's default
-    default: str = "local"  # the server plain `oca` uses: "local" or a remote's name
+    # The pair plain `oca` opens, such as qwen3.6@local; a bare server name means its model.
+    default: str = "local"
     remotes: dict[str, Remote] = field(default_factory=dict)
 
     def servers(self) -> list[str]:
         return ["local", *self.remotes]
+
+    @property
+    def default_server(self) -> str:
+        return self.default.rpartition("@")[2]
+
+    def model_of(self, server: str) -> str:
+        """The model ``server`` serves when started: the one last opened there."""
+        return self.resolved_model.id if server == "local" else self.remotes[server].model
 
     @property
     def resolved_device(self) -> str:
@@ -337,8 +389,12 @@ class Settings:
                 raise OcaError(f"remote {name}: unknown model {r.model!r}; see `oca models`")
             if r.kind == "ssh" and r.model not in MODELS:
                 raise OcaError(f"remote {name}: unknown model {r.model!r}; see `oca models`")
-        if self.default not in self.servers():
-            raise OcaError(f"unknown server {self.default!r}; see `oca ls`")
+        short, at, server = self.default.rpartition("@")
+        if server not in self.servers():
+            raise OcaError(f"default {self.default!r}: no server {server!r}; see `oca ls`")
+        kind = "local" if server == "local" else self.remotes[server].kind
+        if at and kind != "url" and short not in catalog(kind):
+            raise OcaError(f"default {self.default!r}: no model {short!r} there; see `oca ls`")
 
     def set(self, key: str, value: str) -> None:
         names = {f.name for f in fields(self)} - {"remotes"}  # `oca remote` manages those

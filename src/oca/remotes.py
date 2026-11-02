@@ -33,7 +33,9 @@ from .config import (
     OcaError,
     Remote,
     Settings,
+    catalog,
     data_dir,
+    memory_gb,
     model_path,
     process_alive,
     write_private,
@@ -118,6 +120,77 @@ def context(settings: Settings, name: str) -> int:
         conn = read_conn(name)
         return conn.context if conn else r.context or MODELS[r.model].context
     return r.context
+
+
+# -- pairs: a model on a server, what `oca ls` lists and `oca <id>` opens -------------------
+
+
+@dataclass(frozen=True)
+class Pair:
+    id: str  # the model's short name @ the server, such as flash-next@spark2
+    server: str
+    model: str  # its catalog id; for a url server, the server's own name for it
+    context: int
+
+
+def pair_id(settings: Settings, server: str, model: str | None = None) -> str:
+    """The id of ``model`` (default: the one it serves) on ``server``."""
+    model = model or settings.model_of(server)
+    r = settings.remotes.get(server)
+    if r is not None and r.kind == "url":
+        return f"{model}@{server}"
+    found = CLUSTER_MODELS.get(model) if r is not None and r.kind == "ucloud" else MODELS.get(model)
+    return f"{found.short if found else model}@{server}"
+
+
+def pairs(settings: Settings) -> list[Pair]:
+    """Every model each server can serve, the one it serves first; this machine and SSH
+    machines list what fits their memory."""
+    found = []
+    for name in settings.servers():
+        r = settings.remotes.get(name)
+        kind = "local" if r is None else r.kind
+        if r is not None and kind == "url":
+            ids = [r.model]
+        else:
+            memory = memory_gb(settings.resolved_device == "gpu") if r is None else r.memory
+            ids = [
+                m
+                for m in catalog(kind).values()
+                if kind == "ucloud" or not memory or MODELS[m].size_gb * 1.2 <= memory
+            ]
+        now = settings.model_of(name)
+        for m in sorted(ids, key=lambda m: m != now):
+            if m == now:
+                size = context(settings, name)
+            elif kind == "ucloud":
+                size = CLUSTER_MODELS[m].context
+            else:
+                size = (settings.context if r is None else 0) or MODELS[m].context
+            found.append(Pair(pair_id(settings, name, m), name, m, size))
+    return found
+
+
+def find(settings: Settings, word: str) -> list[Pair]:
+    """The pairs ``word`` names: the one whose id it is, else those whose id contains it, as
+    `oca deep` names deepseek@ucloud, else those whose model@server does."""
+    every = pairs(settings)
+    full = {p.id: f"{p.model}@{p.server}" for p in every}
+    for found in (
+        [p for p in every if word in (p.id, full[p.id])],
+        [p for p in every if word in p.id],
+        [p for p in every if word in full[p.id]],
+    ):
+        if found:
+            return found
+    return []
+
+
+def default_pair(settings: Settings) -> Pair:
+    """What plain `oca` opens."""
+    _, at, server = settings.default.rpartition("@")
+    wanted = settings.default if at else pair_id(settings, server)
+    return next(p for p in pairs(settings) if p.id == wanted)
 
 
 def where(settings: Settings, name: str) -> str:
@@ -274,7 +347,7 @@ def start(
         if key := cluster.unregistered_key():
             raise OcaError(
                 "UCloud does not know this machine's SSH key, so the tunnel would fail. "
-                f"Register it once: `oca ucloud-api ssh-keys add {key} --title $(hostname)`"
+                f"Register it once: `oca ucloud ssh-keys add {key} --title $(hostname)`"
             )
         if shared := cluster.join(r, m):
             job, starter = shared
@@ -323,24 +396,6 @@ def _forget(name: str, conn: Conn) -> None:
     if process_alive(conn.tunnel_pid, "ssh"):
         os.kill(conn.tunnel_pid, signal.SIGTERM)
     _save(name, None)
-
-
-def wait_ready(
-    settings: Settings, name: str, on_progress: Callable[[str], None], timeout: float = 7200
-) -> None:
-    r = settings.remotes[name]
-    if r.kind == "ucloud":
-        job = cluster.read("serve")
-        if job is None:
-            raise Down("no server started")
-        cluster.wait_ready(r, job, on_progress, timeout)
-        return
-    deadline = time.monotonic() + timeout
-    while (doing := check(settings, name)) is not None:
-        on_progress(doing)
-        if time.monotonic() > deadline:
-            raise OcaError(f"not ready after {timeout / 60:.0f} min; see `oca remote logs {name}`")
-        time.sleep(10)
 
 
 def _tunnel(name: str, r: Remote, conn: Conn) -> None:

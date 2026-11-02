@@ -148,11 +148,10 @@ class Router:
 
     def later(self, name: str) -> str:
         """What the user can do about server ``name`` themselves."""
-        if name == "local":
-            return "`oca start` restarts it; ctrl+x m picks another server."
-        if self.settings.remotes[name].kind == "url":
+        if name != "local" and self.settings.remotes[name].kind == "url":
             return "ctrl+x m picks another server."  # someone else's to restart
-        return f"`oca start {name}` restarts it; ctrl+x m picks another server."
+        pair = remotes.pair_id(self.settings, name)
+        return f"`oca {pair}` restarts it; ctrl+x m picks another server."
 
     def question(self, down: str, title: str, failed: tuple[str, ...] = ()) -> dict[str, Any]:
         """oca's question while ``down`` is down, as the arguments of OpenCode's tool."""
@@ -426,7 +425,7 @@ def handler(router: Router) -> type[BaseHTTPRequestHandler]:
                 payload = None
             asked = payload.get("model") if payload else None
             servers = router.settings.servers()
-            requested = asked if asked in servers else router.settings.default  # "auto": v0.2
+            requested = asked if asked in servers else router.settings.default_server  # v0.2
             pick = picked(payload["messages"]) if payload else None
             if payload:
                 payload["messages"] = strip(payload["messages"])

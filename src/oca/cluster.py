@@ -26,7 +26,7 @@ import signal
 import socket
 import subprocess
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -239,7 +239,7 @@ def _client() -> Iterator[UCloudClient]:
         with UCloudClient() as client:
             yield client
     except (AuthError, ConfigError) as e:
-        raise OcaError(f"{e}\nLog in with `oca ucloud-api login`.") from e
+        raise OcaError(f"{e}\nLog in with `oca ucloud login`.") from e
 
 
 def _drive(remote: Remote) -> str:
@@ -538,9 +538,8 @@ def ensure_tunnel(remote: Remote, job: Job, timeout: float = 300) -> None:
     except OcaError as e:
         if "Permission denied" in str(e):
             raise OcaError(
-                "UCloud rejected this machine's SSH key. Register it once (`oca ucloud-api "
-                "ssh-keys add ~/.ssh/<key>.pub`); a job only learns the keys registered before "
-                "it started."
+                "UCloud rejected this machine's SSH key. Register it once (`oca ucloud ssh-keys "
+                "add ~/.ssh/<key>.pub`); a job only learns the keys registered before it started."
             ) from e
         raise
     _write(job, job.kind)
@@ -615,22 +614,3 @@ def check(remote: Remote, job: Job) -> str | None:
         return None
     last = log_tail(remote, job, lines=1)
     return f"loading: {last[-100:]}" if last else "starting"
-
-
-def wait_ready(
-    remote: Remote, job: Job, on_progress: Callable[[str], None], timeout: float = 7200
-) -> None:
-    """Block until the remote server answers, reporting the job state and last log line.
-
-    ``timeout`` counts from the job's start: B200 queues can last hours.
-    """
-    deadline = None
-    while (doing := check(remote, job)) is not None:
-        on_progress(doing)
-        if doing == "in queue":
-            deadline = None
-        elif deadline is None:
-            deadline = time.monotonic() + timeout
-        elif time.monotonic() > deadline:
-            raise OcaError(f"not ready after {timeout / 60:.0f} min; see `oca remote logs`")
-        time.sleep(10)
