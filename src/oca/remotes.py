@@ -44,7 +44,7 @@ from .config import (
 SHARED_ROOT = "/opt/oca"  # the install for all users of a machine, like Anaconda's
 SHARED_PORT = 8180  # its endpoint; llama-server listens one above, off users' own oca ports
 INSTALLER = "https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.sh"
-SSH = ("ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10")
+SSH = ("ssh", "-o", "BatchMode=yes")
 
 # Installs oca in a folder all users of the machine can read; exit 3 when it is not writable.
 SHARED_INSTALL = """set -eu
@@ -418,7 +418,7 @@ def _tunnel(name: str, r: Remote, conn: Conn) -> None:
         time.sleep(0.1)
     cmd = [
         *SSH,
-        *("-N", "-o", "ExitOnForwardFailure=yes"),
+        *("-N", "-o", "ConnectTimeout=10", "-o", "ExitOnForwardFailure=yes"),
         *("-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3"),
         *("-L", f"127.0.0.1:{r.port}:127.0.0.1:{conn.port}"),
         r.host,
@@ -430,14 +430,20 @@ def _tunnel(name: str, r: Remote, conn: Conn) -> None:
 # -- the other machine ---------------------------------------------------------------------
 
 
-def ssh(host: str, command: str, timeout: float = 120) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [*SSH, host, command],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+def ssh(
+    host: str, command: str, timeout: float = 120, connect: int = 10
+) -> subprocess.CompletedProcess[str]:
+    """Run ``command`` on ``host``: ``connect`` seconds to connect, ``timeout`` in all."""
+    try:
+        return subprocess.run(
+            [*SSH, "-o", f"ConnectTimeout={connect}", host, command],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise OcaError(f"{host} did not answer within {timeout:.0f} s") from None
 
 
 def oca_command(r: Remote) -> str:
@@ -449,9 +455,9 @@ def oca_command(r: Remote) -> str:
     return f"umask 007; {env} {root}/bin/oca"
 
 
-def serve_call(r: Remote, args: str) -> dict[str, Any]:
+def serve_call(r: Remote, args: str, timeout: float = 120, connect: int = 10) -> dict[str, Any]:
     """Run ``oca serve <args>`` there; it answers with one line of JSON."""
-    done = ssh(r.host, f"{oca_command(r)} serve {args}")
+    done = ssh(r.host, f"{oca_command(r)} serve {args}", timeout, connect)
     lines = done.stdout.strip().splitlines()
     try:
         answer: dict[str, Any] = json.loads(lines[-1])

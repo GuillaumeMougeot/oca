@@ -685,6 +685,36 @@ def test_oca_id_opens_that_model_and_ls_lists_every_pair(
     assert "\ndefault = 'deepseek@ucloud'\n" in run(cli.app, ["config"]).output
 
 
+def test_run_uses_the_model_oca_last_opened_while_it_answers(
+    monkeypatch: pytest.MonkeyPatch, no_gpu: None
+) -> None:
+    from typer.testing import CliRunner
+
+    from oca import cli, remotes
+
+    Settings(remotes={"spark": SPARK, "ucloud": UCLOUD}).save()
+    readied: list[Any] = []
+
+    def ready(settings: Settings, pair: remotes.Pair | None, yes: bool) -> str:
+        readied.append(pair and pair.id)
+        return pair.server if pair else "local"
+
+    monkeypatch.setattr(cli, "_ready", ready)
+    launched: list[list[str]] = []
+    monkeypatch.setattr(cli.agent, "launch", launched.append)
+    up = {"ucloud"}
+    monkeypatch.setattr(cli, "_live", lambda settings, name: name in up)
+    run = CliRunner().invoke
+    assert run(cli.app, ["run", "hi"]).exit_code == 0  # nothing opened yet: the default
+    assert run(cli.app, ["deepseek@ucloud"]).exit_code == 0
+    assert run(cli.app, ["run", "hi"]).exit_code == 0  # where `oca` is
+    assert run(cli.app, ["run", "-m", "qwen3.6@spark", "hi"]).exit_code == 0
+    up.clear()  # it stopped: the default again
+    assert run(cli.app, ["run", "hi"]).exit_code == 0
+    assert readied == [None, "deepseek@ucloud", "deepseek@ucloud", "qwen3.6@spark", None]
+    assert launched[2] == ["run", "hi", "--model", "oca/ucloud"]
+
+
 def test_a_members_ucloud_server_is_listed_and_opening_it_joins_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -827,7 +857,7 @@ def test_opening_another_model_on_an_ssh_machine_asks_first(
     s = Settings(remotes={"spark": SPARK})
     s.save()
     told: dict[str, Any] = {"state": "ready", "model": "qwen3.6-35b-a3b", "mine": True}
-    monkeypatch.setattr(remotes, "serve_call", lambda r, args: told)
+    monkeypatch.setattr(remotes, "serve_call", lambda r, args, **kw: told)
     asked: list[str] = []
     monkeypatch.setattr(typer, "confirm", lambda q, **kw: asked.append(q) or True)
     flash = remotes.Pair("flash-next@spark", "spark", "qwen3.8-flash-next", 262144)
@@ -1059,7 +1089,9 @@ def test_ssh_remote_probe_and_serve_answers(monkeypatch: pytest.MonkeyPatch) -> 
     sent: list[str] = []
     out = {"text": "aarch64\n@shared\nNVIDIA GB10, [N/A]\n@mem 125513000\n", "code": 0}
 
-    def ssh(host: str, command: str, timeout: float = 0) -> subprocess.CompletedProcess[str]:
+    def ssh(
+        host: str, command: str, timeout: float = 0, connect: int = 0
+    ) -> subprocess.CompletedProcess[str]:
         sent.append(command)
         return subprocess.CompletedProcess([], out["code"], stdout=out["text"], stderr="")
 
@@ -1090,6 +1122,17 @@ def test_ssh_remote_probe_and_serve_answers(monkeypatch: pytest.MonkeyPatch) -> 
         remotes.serve_call(SPARK, "")
 
 
+def test_a_machine_that_hangs_is_an_error_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    from oca import remotes
+
+    def hangs(cmd: list[str], **kwargs: Any) -> None:
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", hangs)
+    with pytest.raises(OcaError, match="spark did not answer within 10 s"):
+        remotes.ssh("spark", "true", timeout=10)
+
+
 def test_ssh_remote_up_tunnels_to_its_server_and_down_stops_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1099,7 +1142,7 @@ def test_ssh_remote_up_tunnels_to_its_server_and_down_stops_it(
     tunnels: list[list[str]] = []
     answer = {"state": "loading", "model": "qwen3.6-35b-a3b", "port": 8181, "key": "k"}
     answer |= {"context": 262144, "mine": True}
-    monkeypatch.setattr(remotes, "serve_call", lambda r, args: calls.append(args) or answer)
+    monkeypatch.setattr(remotes, "serve_call", lambda r, args, **kw: calls.append(args) or answer)
     monkeypatch.setattr(cluster, "open_tunnel", lambda cmd, port, log: tunnels.append(cmd) or 42)
     s = Settings(remotes={"spark": SPARK})
     assert remotes.up(s, "spark") == "loading"
@@ -1120,7 +1163,9 @@ def test_ssh_remote_up_tunnels_to_its_server_and_down_stops_it(
         remotes.check(s, "spark")
     assert remotes.read_conn("spark") is None
     assert cli._state(s, "spark") == ("stopped (idle for 60 min, at 14:02)", None, None)
-    monkeypatch.setattr(remotes, "serve_call", lambda r, args: (_ for _ in ()).throw(OcaError()))
+    monkeypatch.setattr(
+        remotes, "serve_call", lambda r, args, **kw: (_ for _ in ()).throw(OcaError())
+    )
     assert cli._state(s, "spark") == ("not answering", None, None)
 
 

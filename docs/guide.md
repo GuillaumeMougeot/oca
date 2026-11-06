@@ -18,8 +18,8 @@ curl -LsSf https://raw.githubusercontent.com/GuillaumeMougeot/oca/main/install.s
 ## Daily use
 
 - **`oca`**, in a project, opens OpenCode on the default server. The first run asks which servers to use besides this machine, and offers to download the local model, 23 GB for CPU.
-- **`oca ls`** lists every model on every server, each with an id such as `flash-next@spark` or `qwen3.6@local`; **`oca <id>`** opens one. Part of an id will do (`oca deep`); a word that fits several, such as `oca flash`, gets a numbered menu. See [Servers](#servers).
-- **`oca run "fix the failing test"`** runs one task without the terminal UI; `-m <id>` picks the model.
+- **`oca ls`** lists every model on every server, each with an id such as `flash-next@spark` or `qwen3.6@local`, and fills in their states as servers answer (3 s at most for a machine over SSH); **`oca <id>`** opens one. Part of an id will do (`oca deep`); a word that fits several, such as `oca flash`, gets a numbered menu. See [Servers](#servers).
+- **`oca run "fix the failing test"`** runs one task without the terminal UI, on the model `oca` last opened while it answers, else the default; `-m <id>` picks one.
 - **`oca web`** opens OpenCode in a browser; see [Phone](#phone-and-other-machines).
 
 OpenCode lists one model per server: `oca/local` and one per remote; `ctrl+x m` switches mid-session.

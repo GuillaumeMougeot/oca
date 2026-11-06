@@ -43,6 +43,8 @@ The user approved all three, and corrected the unit: `oca ls` lists every server
 - **`oca sessions`** used OpenCode's `session list`, which opened a pager (ctrl+c to leave) and cut titles. oca now prints the list itself: the latest first, whole titles, ids cut to the length that tells them apart. `oca -r` takes the start of an id, and alone offers a numbered list, like Claude Code's `--resume`.
 - **States in `oca ls`:** the user asked why some rows said "not downloaded" and others nothing. Blank had meant "not the model its server serves", whether downloaded or not. Now the served model, or the one a stopped server would start with, shows the server's state, and the others say "downloaded" or "not downloaded": this machine checks its files, UCloud its drive, and a machine over SSH reports it in `oca serve --status` (blank for an older oca there, which `oca server update` fixes).
 
+- **`oca run`, 2026-11-06:** with `oca` open on UCloud, picked from the menu since the default (spark2) was off, `oca run` asked about spark2 again. Now it runs on the model `oca` last opened while that answers, else on the default.
+
 ## The command line now
 ```
 oca [id] [-c | -r <session>] [-y]   OpenCode on a model (the default if none)

@@ -20,3 +20,4 @@ One file per question: `YYYY-MM-DD-topic.md`, dated by when it was opened. Each 
 | [2026-11-01-remotes](2026-11-01-remotes.md) | OPEN | `oca remote` (UCloud, SSH, URL), a default server; a down server gets a menu (restart, another, stop), never a silent switch; Spark test next |
 | [2026-11-01-phone-chat](2026-11-01-phone-chat.md) | OPEN | Phone without Termux, through the user's own servers only: not OpenClaw or Telegram; Matrix on the user's VPS proposed |
 | [2026-11-02-cli-review](2026-11-02-cli-review.md) | RESOLVED | `oca ls` lists each model on each server with an id, `oca <id>` opens it; flags as in Claude Code; 13 commands in help, from 17 |
+| [2026-11-06-ls-speed](2026-11-06-ls-speed.md) | OPEN | `oca ls` took as long as its slowest server: 10 s for one off. Now 3 s, and the list shows at once; shared SSH connections next, if measured worth it |

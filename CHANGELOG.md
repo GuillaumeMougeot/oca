@@ -5,10 +5,11 @@
 - **Remotes.** `oca remote` replaces `oca cluster`. A remote is UCloud, a machine you reach over SSH (e.g. a DGX Spark) where oca installs itself for you or for all its users, or any OpenAI-compatible URL. Old `cluster_*` settings become the remote `ucloud`, which becomes the default.
 - **`oca ls` and `oca <id>`.** `oca ls` lists every server and, under it, each model it can serve, with an id such as `flash-next@spark`; `oca <id>` opens one (part of an id will do, and one that fits several gets a numbered menu). One is the default, which plain `oca` opens: `oca config default <id>`. OpenCode lists one model per server, named by its id; `ctrl+x m` switches.
 - **Flags as in Claude Code:** `-r <id>` resumes a session (was `-s`), `-m <id>` picks a model (`-r` picked a server).
-- **`oca run "<task>"`** runs one task unattended (was `oca run -- run "<task>"`).
+- **`oca run "<task>"`** runs one task unattended (was `oca run -- run "<task>"`), on the model `oca` last opened while it answers, else the default.
 - **`oca server add|rm|set|extend`** replaces `oca remote`. `oca stop`, `oca logs` and `oca pull` take an id or a server, and act on the default without one; `oca stop --all` stops everything. `oca start` and `oca models` are gone: `oca <id>` starts what it opens, and `oca ls` lists the models.
 - **`oca --version`**; errors go to stderr; `oca serve` and `oca setup`, which oca runs for you, are out of the help.
 - **Qwen3.8-Flash-Next on 128 GB machines** such as a DGX Spark, through llama.cpp (a 94 GB GGUF in three parts). Adding a machine over SSH offers the biggest model that fits its GPU.
+- **`oca ls` shows the list at once** and fills in each server's state as it answers; a machine that is off costs 3 s, not 10.
 - **`oca ls` says, for each model, whether it is downloaded on its server,** and shows a UCloud server that a project member started; opening it joins it (before, oca said "no server started").
 - **Tab completion is on by default** (bash, zsh, fish): commands, ids and server names. oca installs it on its first run; bash and fish need no change to their rc file.
 - **`oca sessions`** prints this folder's sessions, the latest first, whole titles and short ids, with no pager to quit. `oca -r` takes the start of an id, or alone offers a numbered list. `oca sessions rm <id>` and `oca sessions clear` replace `--delete` and `--clear`.

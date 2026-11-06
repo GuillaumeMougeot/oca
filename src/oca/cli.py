@@ -14,7 +14,7 @@ import shlex
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
 from importlib.metadata import version
 from pathlib import Path
@@ -23,8 +23,10 @@ from typing import Annotated, Any
 import httpx
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 from typer.core import TyperGroup
 
 from . import agent, cluster, install, remotes, router, serve, server, web
@@ -363,6 +365,7 @@ def main(
         settings = Settings.load()
         session = None if resume is None else _session(resume)  # before any server starts
         name = _ready(settings, _pick(settings, model) if model else None, yes)
+        _opened_path().write_text(remotes.pair_id(settings, name))
         args = ["--continue"] if last else []
         args += ["--session", session] if session else []
         args += ["--model", f"{agent.PROVIDER}/{name}"] if name != settings.default_server else []
@@ -379,13 +382,30 @@ def main(
 def run(ctx: typer.Context, model: ModelOpt = None, yes: Yes = False) -> None:
     """Run one task unattended: `oca run "fix the failing test"`.
 
-    Other options go to `opencode run`, such as `--variant low`.
+    It runs on the model `oca` last opened while that answers, else on the default. Other
+    options go to `opencode run`, such as `--variant low`.
     """
     if not ctx.args:
         raise OcaError('say what to do: `oca run "fix the failing test"`')
     settings = Settings.load()
-    name = _ready(settings, _pick(settings, model) if model else None, yes)
+    name = _ready(settings, _pick(settings, model) if model else _opened(settings), yes)
     agent.launch(["run", *ctx.args, "--model", f"{agent.PROVIDER}/{name}"])
+
+
+def _opened_path() -> Path:
+    path = data_dir() / "run" / "opened.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _opened(settings: Settings) -> Pair | None:
+    """The pair `oca` last opened, if its server answers."""
+    with suppress(OSError):
+        wanted = _opened_path().read_text().strip()
+        for p in remotes.pairs(settings):
+            if p.id == wanted and _live(settings, p.server):
+                return p
+    return None
 
 
 @sessions_app.callback(invoke_without_command=True)
@@ -507,18 +527,42 @@ def ls() -> None:
     """List every model on every server, with the id that opens it; * marks the default."""
     settings = Settings.load()
     names = settings.servers()
-    with ThreadPoolExecutor(len(names)) as pool:  # each may ask its machine
-        states = dict(zip(names, pool.map(lambda n: _state(settings, n), names), strict=True))
     default, every = remotes.default_pair(settings).id, remotes.pairs(settings)
     models = {p.id: _model(settings, p) for p in every}
     wide = max(map(len, models)), max(map(len, models.values()))
-    for name in names:  # a line per server, then one per model: fits 80 columns
-        console.print(f"[bold]{escape(name)}[/]: {escape(_where(settings, name))}")
-        for p in (p for p in every if p.server == name):
-            mark = "*" if p.id == default else " "
-            state = _row(states[name], p.model, settings.model_of(name))
-            row = f" {mark} {p.id:<{wide[0]}}  {models[p.id]:<{wide[1]}}  {p.context // 1000:>3}k"
-            console.print(escape(f"{row}  {state}".rstrip()), highlight=False)
+    states: dict[str, tuple[str, str | None, set[str] | None]] = {}
+
+    def listing() -> Text:  # a line per server, then one per model: fits 80 columns
+        lines = []
+        for name in names:
+            lines.append(Text.assemble((name, "bold"), f": {_where(settings, name)}"))
+            chosen = settings.model_of(name)
+            for p in (p for p in every if p.server == name):
+                mark = "*" if p.id == default else " "
+                if name in states:
+                    state = _row(states[name], p.model, chosen)
+                else:
+                    state = "checking…" if p.model == chosen else ""
+                size = f"{p.context // 1000:>3}k"
+                row = f" {mark} {p.id:<{wide[0]}}  {models[p.id]:<{wide[1]}}  {size}  {state}"
+                lines.append(Text(row.rstrip()))
+        return Text("\n").join(lines)
+
+    # All servers are asked at once. In a terminal the list shows now and fills in as they
+    # answer; then, as in a pipe, it is printed once.
+    with (
+        ThreadPoolExecutor(len(names)) as pool,
+        Live(listing(), console=console, auto_refresh=False, transient=True) as live,
+    ):
+        asked = {pool.submit(_state, settings, n): n for n in names}
+        for done in as_completed(asked):
+            states[asked[done]] = done.result()
+            live.update(listing(), refresh=True)
+    console.print(listing())
+    console.print(
+        "`oca <id>` opens one, and part of an id will do; plain `oca` opens the default, *. "
+        "A server serves one model at a time."
+    )
 
 
 def _row(now: tuple[str, str | None, set[str] | None], model: str, chosen: str) -> str:
@@ -532,10 +576,6 @@ def _row(now: tuple[str, str | None, set[str] | None], model: str, chosen: str) 
     if serving is None and model == chosen:
         return state
     return "" if have is None else "downloaded"
-    console.print(
-        "`oca <id>` opens one, and part of an id will do; plain `oca` opens the default, *. "
-        "A server serves one model at a time."
-    )
 
 
 def _where(settings: Settings, name: str) -> str:
@@ -569,8 +609,8 @@ def _state(settings: Settings, name: str) -> tuple[str, str | None, set[str] | N
     if r.kind == "url":
         return ("ready" if found and remotes.healthy(found) else "not answering"), r.model, None
     if r.kind == "ssh":
-        try:
-            told = remotes.serve_call(r, "--status")
+        try:  # briefly: a machine that is off costs `oca ls` 3 s, not 10
+            told = remotes.serve_call(r, "--status", timeout=10, connect=3)
         except OcaError:
             return "not answering", None, None
         there = set(told["downloaded"]) if "downloaded" in told else None  # older oca: unknown
